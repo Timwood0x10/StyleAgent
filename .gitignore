@@ -46,3 +46,5 @@ Thumbs.db
 *.sqlite3
 
 plan/
+
+.pytest_cache/

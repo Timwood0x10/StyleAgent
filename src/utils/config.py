@@ -1,6 +1,7 @@
 """
 Configuration Management - Load from config.yaml and .env
 """
+
 import os
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -156,8 +157,7 @@ class Config:
     @property
     def LOG_FORMAT(self) -> str:
         return self._get(
-            "logging.format",
-            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+            "logging.format", "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
         )
 
     @property

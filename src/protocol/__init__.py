@@ -5,6 +5,8 @@ Protocol Module - Agent Communication Protocol
 from .ahp import (
     AHPMessage,
     AHPMethod,
+    AHPError,
+    AHPErrorCode,
     MessageQueue,
     AHPSender,
     AHPReceiver,
@@ -16,6 +18,8 @@ from .ahp import (
 __all__ = [
     "AHPMessage",
     "AHPMethod",
+    "AHPError",
+    "AHPErrorCode",
     "MessageQueue",
     "AHPSender",
     "AHPReceiver",

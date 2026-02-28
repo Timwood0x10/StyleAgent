@@ -1,6 +1,7 @@
 """
 Logging Module - Structured logging with configuration
 """
+
 import logging
 import os
 from logging.handlers import RotatingFileHandler
@@ -51,7 +52,7 @@ class Logger:
             file_handler = RotatingFileHandler(
                 log_file,
                 maxBytes=config.LOG_MAX_BYTES,
-                backupCount=config.LOG_BACKUP_COUNT
+                backupCount=config.LOG_BACKUP_COUNT,
             )
             file_handler.setLevel(getattr(logging, config.LOG_LEVEL))
             file_formatter = logging.Formatter(config.LOG_FORMAT)

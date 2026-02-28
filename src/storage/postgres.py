@@ -26,7 +26,9 @@ class Database:
     def conn(self):
         """Get database connection"""
         if self._conn is None:
-            logger.info(f"Connecting to database: {config.PG_HOST}:{config.PG_PORT}/{config.PG_DATABASE}")
+            logger.info(
+                f"Connecting to database: {config.PG_HOST}:{config.PG_PORT}/{config.PG_DATABASE}"
+            )
             self._conn = psycopg2.connect(
                 host=config.PG_HOST,
                 port=config.PG_PORT,
@@ -80,6 +82,9 @@ class StorageLayer:
 
     def _init_tables(self):
         """Initialize all tables"""
+        # Enable pgvector extension
+        self.db.execute("CREATE EXTENSION IF NOT EXISTS vector")
+
         sql = """
         -- User profiles table
         CREATE TABLE IF NOT EXISTS user_profiles (

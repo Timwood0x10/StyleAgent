@@ -8,7 +8,7 @@ from typing import Dict, Any, Optional
 from ..core.models import UserProfile, OutfitRecommendation, OutfitTask, TaskStatus
 from ..utils.llm import LocalLLM
 from ..utils import get_logger
-from ..protocol import get_message_queue, AHPReceiver, AHPSender
+from ..protocol import get_message_queue, AHPReceiver, AHPSender, AHPError, AHPErrorCode
 
 # Logger for this module
 logger = get_logger(__name__)
@@ -74,7 +74,9 @@ class OutfitSubAgent:
         while self._running:
             msg = self.receiver.wait_for_task(timeout=5)
             if msg:
-                logger.info(f"[{self.agent_id}] received task: {msg.payload.get('category')}")
+                logger.info(
+                    f"[{self.agent_id}] received task: {msg.payload.get('category')}"
+                )
                 self._handle_task(msg)
 
     def _handle_task(self, msg):
@@ -126,9 +128,17 @@ class OutfitSubAgent:
             logger.info(f"[{self.agent_id}] task completed")
 
         except Exception as e:
+            error = AHPError(
+                message=f"Task execution failed: {str(e)}",
+                code=AHPErrorCode.UNKNOWN,
+                agent_id=self.agent_id,
+                task_id=task_id,
+            )
             self.sender.send_result(
                 "leader", task_id, session_id, {"error": str(e)}, status="failed"
             )
+            # Move to DLQ for failed tasks
+            self.mq.to_dlq(self.agent_id, msg, str(e))
             logger.error(f"[{self.agent_id}] task failed: {e}")
 
     def _recommend(self, user_profile: UserProfile) -> OutfitRecommendation:
@@ -199,7 +209,9 @@ Only return JSON.
                     price_range=data.get("price_range", ""),
                 )
         except Exception as e:
-            logger.warning(f"Failed to parse outfit recommendation, using fallback: {e}")
+            logger.warning(
+                f"Failed to parse outfit recommendation, using fallback: {e}"
+            )
 
         return OutfitRecommendation(
             category=self.category,

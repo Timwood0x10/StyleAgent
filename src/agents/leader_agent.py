@@ -3,6 +3,7 @@ Leader Agent - User Profile Parsing and Task Distribution (using AHP Protocol)
 """
 
 import json
+import time
 import uuid
 from typing import Any, Dict, List
 from ..core.models import (
@@ -15,7 +16,7 @@ from ..core.models import (
 )
 from ..utils.llm import LocalLLM
 from ..utils import get_logger
-from ..protocol import get_message_queue, AHPSender
+from ..protocol import get_message_queue, AHPSender, AHPError, AHPErrorCode, AHPMethod
 
 # Logger for this module
 logger = get_logger(__name__)
@@ -223,7 +224,7 @@ Only return JSON, no other content.
         return tasks
 
     def _dispatch_tasks_via_ahp(self, tasks: List[OutfitTask], profile: UserProfile):
-        """Dispatch tasks via AHP protocol"""
+        """Dispatch tasks via AHP protocol with error handling"""
 
         # Category description mapping
         category_desc = {
@@ -252,25 +253,41 @@ Only return JSON, no other content.
                 "instruction": f"Please recommend {desc} for {profile.name}, considering their mood is {profile.mood}",
             }
 
-            # Send via AHP protocol
-            self.sender.send_task(
-                target_agent=task.assignee_agent_id,
-                task_id=task.task_id,
-                session_id=self.session_id,
-                payload=payload,
-                token_limit=500,
-            )
+            # Send via AHP protocol with error handling
+            try:
+                self.sender.send_task(
+                    target_agent=task.assignee_agent_id,
+                    task_id=task.task_id,
+                    session_id=self.session_id,
+                    payload=payload,
+                    token_limit=500,
+                )
+                logger.info(
+                    f"Dispatched task {task.task_id} to {task.assignee_agent_id}"
+                )
+            except Exception as e:
+                error = AHPError(
+                    message=f"Failed to dispatch task: {str(e)}",
+                    code=AHPErrorCode.TIMEOUT,
+                    agent_id=task.assignee_agent_id,
+                    task_id=task.task_id,
+                )
+                logger.error(f"AHP Error: {error.message}")
+                # Move to DLQ
+                self.mq.to_dlq(
+                    task.assignee_agent_id,
+                    msg=None,  # Message creation failed
+                    error=str(e),
+                )
 
     def _collect_results(
         self, tasks: List[OutfitTask], timeout: int = 60
     ) -> Dict[str, OutfitRecommendation]:
-        """Collect results from all agents"""
-
-        import time
-
+        """Collect results from all agents with ACK handling"""
         results = {}
         start = time.time()
         received = set()
+        pending_tasks = {t.assignee_agent_id: t for t in tasks}
 
         while len(received) < len(tasks) and (time.time() - start) < timeout:
             # Leader monitors all results
@@ -280,8 +297,30 @@ Only return JSON, no other content.
                 if t.assignee_agent_id not in received
             ]:
                 msg = self.mq.receive("leader", timeout=2)
-                if msg and msg.method == "RESULT":
+
+                if msg is None:
+                    continue
+
+                # Handle ACK messages
+                if msg.method == AHPMethod.ACK:
+                    original_msg_id = msg.payload.get("original_message_id", "")
+                    ack_status = msg.payload.get("ack_status", "")
+                    logger.debug(f"Received ACK from {agent_id}: {ack_status}")
+                    continue
+
+                # Handle RESULT messages
+                if msg.method == AHPMethod.RESULT:
                     result_data = msg.payload.get("result", {})
+                    status = msg.payload.get("status", "success")
+
+                    if status == "failed":
+                        error_msg = result_data.get("error", "Unknown error")
+                        logger.error(f"Task failed from {agent_id}: {error_msg}")
+                        # Move to DLQ for investigation
+                        self.mq.to_dlq(agent_id, msg, error_msg)
+                        received.add(agent_id)
+                        continue
+
                     category = result_data.get("category", "unknown")
                     results[category] = OutfitRecommendation(
                         category=category,
@@ -293,6 +332,25 @@ Only return JSON, no other content.
                     )
                     received.add(agent_id)
                     logger.info(f"Received result from {category}")
+
+                # Handle PROGRESS messages
+                elif msg.method == AHPMethod.PROGRESS:
+                    progress = msg.payload.get("progress", 0)
+                    progress_msg = msg.payload.get("message", "")
+                    logger.debug(
+                        f"Progress from {agent_id}: {progress} - {progress_msg}"
+                    )
+
+        # Check for missing results and log warnings
+        missing = set(pending_tasks.keys()) - received
+        if missing:
+            logger.warning(f"Missing results from agents: {missing}")
+            # Check DLQ for failed messages
+            dlq = self.mq.get_dlq()
+            if dlq:
+                logger.error(
+                    f"DLQ contains {sum(len(v) for v in dlq.values())} failed messages"
+                )
 
         return results
 

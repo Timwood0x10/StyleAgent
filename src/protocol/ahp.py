@@ -8,6 +8,7 @@ Supported methods:
 - HEARTBEAT: Heartbeat check (bidirectional)
 - TOKEN_REQUEST: Token request
 - TOKEN_RESPONSE: Token response
+- ACK: Message acknowledgment
 """
 
 import queue
@@ -16,6 +17,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 from typing import Any, Dict, Optional
 from ..utils import get_logger
 
@@ -31,6 +33,49 @@ class AHPMethod:
     HEARTBEAT = "HEARTBEAT"
     TOKEN_REQUEST = "TOKEN_REQUEST"
     TOKEN_RESPONSE = "TOKEN_RESPONSE"
+    ACK = "ACK"
+
+
+# AHP Error Codes
+class AHPErrorCode(Enum):
+    """AHP protocol error codes"""
+
+    UNKNOWN = "UNKNOWN"
+    INVALID_MESSAGE = "INVALID_MESSAGE"
+    TIMEOUT = "TIMEOUT"
+    AGENT_NOT_FOUND = "AGENT_NOT_FOUND"
+    QUEUE_FULL = "QUEUE_FULL"
+    SERIALIZATION_ERROR = "SERIALIZATION_ERROR"
+    DESERIALIZATION_ERROR = "DESERIALIZATION_ERROR"
+    RETRY_EXHAUSTED = "RETRY_EXHAUSTED"
+
+
+class AHPError(Exception):
+    """AHP protocol error with error code and context"""
+
+    def __init__(
+        self,
+        message: str,
+        code: AHPErrorCode = AHPErrorCode.UNKNOWN,
+        agent_id: str = "",
+        task_id: str = "",
+        details: Dict[str, Any] = None,
+    ):
+        super().__init__(message)
+        self.message = message
+        self.code = code
+        self.agent_id = agent_id
+        self.task_id = task_id
+        self.details = details or {}
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "message": self.message,
+            "code": self.code.value,
+            "agent_id": self.agent_id,
+            "task_id": self.task_id,
+            "details": self.details,
+        }
 
 
 @dataclass
@@ -60,14 +105,42 @@ class AHPMessage:
             "message_id": self.message_id,
         }
 
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "AHPMessage":
+        """Create AHPMessage from dictionary"""
+        timestamp = data.get("timestamp")
+        if isinstance(timestamp, str):
+            timestamp = datetime.fromisoformat(timestamp)
+        elif timestamp is None:
+            timestamp = datetime.now()
+
+        return cls(
+            method=data.get("method", ""),
+            agent_id=data.get("agent_id", ""),
+            target_agent=data.get("target_agent", ""),
+            task_id=data.get("task_id", ""),
+            session_id=data.get("session_id", ""),
+            payload=data.get("payload", {}),
+            token_limit=data.get("token_limit", 500),
+            timestamp=timestamp,
+            message_id=data.get("message_id", str(uuid.uuid4())),
+        )
+
 
 class MessageQueue:
-    """Agent message queue with timeout and heartbeat support"""
+    """Agent message queue with timeout, heartbeat, DLQ and retry support"""
 
-    def __init__(self):
+    def __init__(self, max_retries: int = 3, retry_delay: float = 1.0):
         self._queues: Dict[str, queue.Queue] = {}
         self._lock = threading.Lock()
-        self._heartbeats: Dict[str, datetime] = {}  # Agent heartbeats
+        self._heartbeats: Dict[str, datetime] = {}
+        self._message_ids: Dict[str, set] = {}  # Track message IDs for deduplication
+        # Dead Letter Queue: stores failed messages
+        self._dlq: Dict[str, list] = {}  # agent_id -> list of failed messages
+        # Retry tracking
+        self._retry_count: Dict[str, int] = {}  # message_id -> retry count
+        self._max_retries = max_retries
+        self._retry_delay = retry_delay
 
     def get_queue(self, agent_id: str) -> queue.Queue:
         """Get queue for agent"""
@@ -77,7 +150,18 @@ class MessageQueue:
             return self._queues[agent_id]
 
     def send(self, agent_id: str, message: AHPMessage):
-        """Send message"""
+        """Send message with deduplication"""
+        # Check for duplicate message
+        with self._lock:
+            if agent_id not in self._message_ids:
+                self._message_ids[agent_id] = set()
+
+            if message.message_id in self._message_ids[agent_id]:
+                logger.warning(f"Duplicate message detected: {message.message_id}")
+                return
+
+            self._message_ids[agent_id].add(message.message_id)
+
         self.get_queue(agent_id).put(message)
 
     def receive(self, agent_id: str, timeout: float = 30) -> Optional[AHPMessage]:
@@ -101,6 +185,52 @@ class MessageQueue:
         """Get heartbeat time"""
         with self._lock:
             return self._heartbeats.get(agent_id)
+
+    def to_dlq(self, agent_id: str, message: AHPMessage, error: str = ""):
+        """Move failed message to Dead Letter Queue"""
+        with self._lock:
+            if agent_id not in self._dlq:
+                self._dlq[agent_id] = []
+
+            dlq_entry = {
+                "message": message.to_dict(),
+                "error": error,
+                "timestamp": datetime.now().isoformat(),
+                "retry_count": self._retry_count.get(message.message_id, 0),
+            }
+            self._dlq[agent_id].append(dlq_entry)
+            logger.error(f"Message {message.message_id} moved to DLQ: {error}")
+
+    def get_dlq(self, agent_id: str = None) -> Dict[str, list]:
+        """Get messages from Dead Letter Queue"""
+        with self._lock:
+            if agent_id:
+                return self._dlq.get(agent_id, [])
+            return dict(self._dlq)
+
+    def clear_dlq(self, agent_id: str = None):
+        """Clear Dead Letter Queue"""
+        with self._lock:
+            if agent_id:
+                self._dlq[agent_id] = []
+            else:
+                self._dlq = {}
+
+    def should_retry(self, message_id: str) -> bool:
+        """Check if message should be retried"""
+        retry_count = self._retry_count.get(message_id, 0)
+        return retry_count < self._max_retries
+
+    def increment_retry(self, message_id: str) -> int:
+        """Increment retry count and return new count"""
+        with self._lock:
+            self._retry_count[message_id] = self._retry_count.get(message_id, 0) + 1
+            return self._retry_count[message_id]
+
+    def reset_retry(self, message_id: str):
+        """Reset retry count for message"""
+        with self._lock:
+            self._retry_count.pop(message_id, None)
 
     def is_alive(self, agent_id: str, timeout: float = 60) -> bool:
         """Check if agent is alive"""
@@ -211,7 +341,9 @@ class AHPSender:
             token_limit=token_limit,
         )
         self.mq.send(target_agent, msg)
-        logger.debug(f"SEND [->{target_agent}] TASK: {payload.get('category', 'unknown')} (token_limit: {token_limit})")
+        logger.debug(
+            f"SEND [->{target_agent}] TASK: {payload.get('category', 'unknown')} (token_limit: {token_limit})"
+        )
         return msg
 
     def send_result(
@@ -267,6 +399,30 @@ class AHPSender:
         self.mq.send(target_agent, msg)
         return msg
 
+    def send_ack(
+        self,
+        target_agent: str,
+        session_id: str,
+        original_message_id: str,
+        status: str = "received",
+    ) -> AHPMessage:
+        """Send acknowledgment for a message"""
+        msg = AHPMessage(
+            method=AHPMethod.ACK,
+            agent_id="leader",
+            target_agent=target_agent,
+            task_id="",
+            session_id=session_id,
+            payload={
+                "original_message_id": original_message_id,
+                "ack_status": status,
+                "timestamp": datetime.now().isoformat(),
+            },
+        )
+        self.mq.send(target_agent, msg)
+        logger.debug(f"SEND [->{target_agent}] ACK for {original_message_id}: {status}")
+        return msg
+
 
 class AHPReceiver:
     """AHP Receiver"""
@@ -275,13 +431,42 @@ class AHPReceiver:
         self.agent_id = agent_id
         self.mq = message_queue
 
-    def receive(self, timeout: float = 30) -> Optional[AHPMessage]:
+    def receive(
+        self, timeout: float = 30, auto_ack: bool = True
+    ) -> Optional[AHPMessage]:
         """Receive message"""
         msg = self.mq.receive(self.agent_id, timeout)
         if msg:
             logger.debug(f"RECV [<-{self.agent_id}] {msg.method}")
             self.mq.update_heartbeat(self.agent_id)
+
+            # Auto send ACK for TASK/RESULT/PROGRESS messages
+            if auto_ack and msg.method in [
+                AHPMethod.TASK,
+                AHPMethod.RESULT,
+                AHPMethod.PROGRESS,
+            ]:
+                self._send_ack(msg)
         return msg
+
+    def _send_ack(self, original_msg: AHPMessage):
+        """Send acknowledgment for received message"""
+        ack_msg = AHPMessage(
+            method=AHPMethod.ACK,
+            agent_id=self.agent_id,
+            target_agent=original_msg.agent_id,
+            task_id=original_msg.task_id,
+            session_id=original_msg.session_id,
+            payload={
+                "original_message_id": original_msg.message_id,
+                "ack_status": "received",
+                "timestamp": datetime.now().isoformat(),
+            },
+        )
+        self.mq.send(original_msg.agent_id, ack_msg)
+        logger.debug(
+            f"SEND [->{original_msg.agent_id}] ACK for {original_msg.message_id}"
+        )
 
     def wait_for_task(self, timeout: float = 60) -> Optional[AHPMessage]:
         """Wait for task"""
