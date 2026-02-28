@@ -1,0 +1,14 @@
+# iFlow Multi-Agent System
+
+# Core
+langchain>=0.3.0
+langchain-openai>=0.2.0
+
+# Database
+psycopg2-binary>=2.9.0
+
+# Vector (optional)
+# pgvector>=0.2.0
+
+# Utils
+python-dotenv>=1.0.0
