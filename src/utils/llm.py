@@ -1,12 +1,12 @@
 """
-本地模型接入 - gpt-oss-20b
+Local Model Integration - gpt-oss-20b
 """
 import requests
 from .config import config
 
 
 class LocalLLM:
-    """本地 LLM 封装 - 直接使用 HTTP"""
+    """Local LLM wrapper - direct HTTP usage"""
     
     def __init__(
         self,
@@ -25,7 +25,7 @@ class LocalLLM:
         self.available = self._check_connection()
     
     def _check_connection(self) -> bool:
-        """检查模型服务是否可用"""
+        """Check if model service is available"""
         try:
             resp = requests.get(f"{self.base_url}/models", timeout=5)
             if resp.status_code == 200:
@@ -38,9 +38,9 @@ class LocalLLM:
             return False
     
     def invoke(self, prompt: str, system_prompt: str = "") -> str:
-        """调用模型"""
+        """Invoke model"""
         if not self.available:
-            return "本地模型未连接"
+            return "Local model not connected"
         
         messages = []
         if system_prompt:
@@ -61,17 +61,17 @@ class LocalLLM:
             data = resp.json()
             return data["choices"][0]["message"]["content"]
         except Exception as e:
-            return f"调用失败: {e}"
+            return f"Invocation failed: {e}"
     
     def __repr__(self):
-        status = "已连接" if self.available else "未连接"
+        status = "connected" if self.available else "not connected"
         return f"LocalLLM({self.model_name}, {status})"
 
 
 class MockLLM:
-    """模拟 LLM - 用于测试"""
+    """Mock LLM - for testing"""
     
-    def __init__(self, response: str = "这是模拟响应"):
+    def __init__(self, response: str = "This is a mock response"):
         self.response = response
         self.available = True
     
@@ -83,7 +83,7 @@ def create_llm(
     provider: str = "local",
     **kwargs
 ) -> LocalLLM:
-    """创建 LLM 实例"""
+    """Create LLM instance"""
     if provider == "local":
         return LocalLLM(**kwargs)
     elif provider == "mock":

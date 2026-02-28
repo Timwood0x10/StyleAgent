@@ -1,5 +1,5 @@
 """
-Sub Agent - 穿搭推荐执行 (使用 AHP 协议)
+Sub Agent - Outfit Recommendation Execution (using AHP Protocol)
 """
 import json
 import threading
@@ -9,84 +9,84 @@ from ..utils.llm import LocalLLM
 from ..protocol import get_message_queue, AHPReceiver, AHPSender
 
 
-# 各品类的系统提示
+# System prompts for each category
 CATEGORY_PROMPTS = {
-    "head": """你是一位配饰专家，擅长推荐帽子、眼镜、项链、耳饰等头部配饰。
-根据用户的特征和心情，推荐适合的配饰。
-注意:
-- 心情压抑时，选择能带来活力或安慰感的配饰
-- 考虑用户的职业和日常活动
-- 给出具体的颜色和款式建议""",
+    "head": """You are an accessory expert, skilled at recommending head accessories like hats, glasses, necklaces, earrings.
+Based on user characteristics and mood, recommend suitable accessories.
+Note:
+- When mood is depressed, choose accessories that bring vitality or comfort
+- Consider user's occupation and daily activities
+- Provide specific color and style suggestions""",
     
-    "top": """你是一位上装搭配专家，擅长推荐T恤、衬衫、外套、卫衣等上衣。
-根据用户的特征和心情，推荐适合的上装。
-注意:
-- 心情压抑时，选择能提升心情的颜色(如亮色)
-- 考虑季节和场合
-- 给出具体的款式和颜色建议""",
+    "top": """You are a tops expert, skilled at recommending T-shirts, shirts, jackets, hoodies, etc.
+Based on user characteristics and mood, recommend suitable tops.
+Note:
+- When mood is depressed, choose colors that improve mood (like bright colors)
+- Consider season and occasion
+- Provide specific style and color suggestions""",
     
-    "bottom": """你是一位裤装搭配专家，擅长推荐牛仔裤、休闲裤、西裤等下装。
-根据用户的特征和心情，推荐适合的裤子。
-注意:
-- 考虑与上装的搭配
-- 舒适度和场合需求
-- 给出具体的款式和颜色建议""",
+    "bottom": """You are a bottoms expert, skilled at recommending jeans, casual pants, dress pants, etc.
+Based on user characteristics and mood, recommend suitable bottoms.
+Note:
+- Consider coordination with tops
+- Comfort and occasion requirements
+- Provide specific style and color suggestions""",
     
-    "shoes": """你是一位鞋履搭配专家，擅长推荐各种鞋履。
-根据用户的特征和心情，推荐适合的鞋子。
-注意:
-- 考虑与整体穿搭的协调
-- 舒适度和实用性
-- 给出具体的款式和颜色建议"""
+    "shoes": """You are a footwear expert, skilled at recommending all kinds of shoes.
+Based on user characteristics and mood, recommend suitable shoes.
+Note:
+- Consider coordination with overall outfit
+- Comfort and practicality
+- Provide specific style and color suggestions"""
 }
 
 
 class OutfitSubAgent:
-    """穿搭子Agent (通过 AHP 协议通信)"""
+    """Outfit Sub Agent (communicating via AHP Protocol)"""
     
     def __init__(self, agent_id: str, category: str, llm: LocalLLM):
         self.agent_id = agent_id
         self.category = category
         self.llm = llm
-        self.system_prompt = CATEGORY_PROMPTS.get(category, "你是一位穿搭顾问")
+        self.system_prompt = CATEGORY_PROMPTS.get(category, "You are a fashion consultant")
         self.mq = get_message_queue()
         self.receiver = AHPReceiver(agent_id, self.mq)
         self.sender = AHPSender(self.mq)
         self._running = False
     
     def start(self):
-        """启动 Agent (监听消息队列)"""
+        """Start agent (listen to message queue)"""
         self._running = True
         thread = threading.Thread(target=self._run_loop, daemon=True)
         thread.start()
-        print(f"   🟢 {self.agent_id} 已启动 (监听中...)")
+        print(f"   🟢 {self.agent_id} started (listening...)")
     
     def stop(self):
-        """停止 Agent"""
+        """Stop agent"""
         self._running = False
     
     def _run_loop(self):
-        """主循环 - 监听消息"""
+        """Main loop - listen for messages"""
         while self._running:
             msg = self.receiver.wait_for_task(timeout=5)
             if msg:
-                print(f"\n   📬 [{self.agent_id}] 收到任务: {msg.payload.get('category')}")
+                print(f"\n   📬 [{self.agent_id}] received task: {msg.payload.get('category')}")
                 self._handle_task(msg)
     
     def _handle_task(self, msg):
-        """处理任务"""
+        """Handle task"""
         task_id = msg.task_id
         session_id = msg.session_id
         payload = msg.payload
         
         try:
-            # 1. 发送进度
-            self.sender.send_progress("leader", task_id, session_id, 0.1, "开始处理")
+            # 1. Send progress
+            self.sender.send_progress("leader", task_id, session_id, 0.1, "Starting")
             
-            # 2. 执行推荐
+            # 2. Execute recommendation
             user_info = payload.get("user_info", {})
             profile = UserProfile(
-                name=user_info.get("name", "用户"),
+                name=user_info.get("name", "User"),
                 gender=user_info.get("gender", "male"),
                 age=user_info.get("age", 25),
                 occupation=user_info.get("occupation", ""),
@@ -96,12 +96,12 @@ class OutfitSubAgent:
                 occasion=user_info.get("occasion", "daily")
             )
             
-            self.sender.send_progress("leader", task_id, session_id, 0.5, "正在推荐...")
+            self.sender.send_progress("leader", task_id, session_id, 0.5, "Recommending...")
             result = self._recommend(profile)
             
-            self.sender.send_progress("leader", task_id, session_id, 0.9, "完成")
+            self.sender.send_progress("leader", task_id, session_id, 0.9, "Completed")
             
-            # 3. 返回结果
+            # 3. Return result
             self.sender.send_result("leader", task_id, session_id, {
                 "category": self.category,
                 "items": result.items,
@@ -111,15 +111,15 @@ class OutfitSubAgent:
                 "price_range": result.price_range
             }, status="success")
             
-            print(f"   ✅ [{self.agent_id}] 任务完成")
+            print(f"   ✅ [{self.agent_id}] task completed")
             
         except Exception as e:
             self.sender.send_result("leader", task_id, session_id, 
                 {"error": str(e)}, status="failed")
-            print(f"   ❌ [{self.agent_id}] 任务失败: {e}")
+            print(f"   ❌ [{self.agent_id}] task failed: {e}")
     
     def _recommend(self, user_profile: UserProfile) -> OutfitRecommendation:
-        """执行推荐"""
+        """Execute recommendation"""
         
         prompt = self._build_prompt(user_profile)
         response = self.llm.invoke(prompt, self.system_prompt)
@@ -127,51 +127,51 @@ class OutfitSubAgent:
         return self._parse_response(response)
     
     def _build_prompt(self, user_profile: UserProfile) -> str:
-        """构建提示词"""
+        """Build prompt"""
         
         category_names = {
-            "head": "帽子和饰品(帽子、眼镜、项链、耳饰等)",
-            "top": "上衣(T恤、衬衫、外套、卫衣等)",
-            "bottom": "裤子(牛仔裤、休闲裤、西裤等)",
-            "shoes": "鞋子(运动鞋、皮鞋、休闲鞋等)"
+            "head": "head accessories (hats, glasses, necklaces, earrings, etc.)",
+            "top": "tops (T-shirts, shirts, jackets, hoodies, etc.)",
+            "bottom": "bottoms (jeans, casual pants, dress pants, etc.)",
+            "shoes": "shoes (sneakers, dress shoes, casual shoes, etc.)"
         }
         
         mood_adjustments = {
-            "depressed": "用户今天心情比较压抑，建议选择能带来活力或安慰感的款式，可以适当加入一些亮色点缀",
-            "happy": "用户今天心情愉悦，可以选择更加鲜艳活泼的风格",
-            "excited": "用户比较兴奋，建议选择大方得体的款式",
-            "normal": "用户心情一般，选择舒适自然的风格即可"
+            "depressed": "User is feeling depressed today, recommend styles that bring vitality or comfort, consider adding some bright colors",
+            "happy": "User is happy today, can choose more vibrant and lively styles",
+            "excited": "User is excited, recommend elegant and appropriate styles",
+            "normal": "User's mood is normal, choose comfortable and natural styles"
         }
         
-        prompt = f"""用户信息:
+        prompt = f"""User Info:
 {user_profile.to_prompt_context()}
 
-请为用户推荐{category_names.get(self.category, self.category)}。
+Please recommend {category_names.get(self.category, self.category)} for the user.
 
 {mood_adjustments.get(user_profile.mood, "")}
 
-要求:
-1. 根据用户的年龄({user_profile.age}岁)和职业({user_profile.occupation})选择合适的款式
-2. 考虑季节({user_profile.season})和场合({user_profile.occasion})
-3. 预算: {user_profile.budget}
-4. 如果用户有爱好: {', '.join(user_profile.hobbies)}，考虑这些爱好对穿搭的影响
+Requirements:
+1. Choose appropriate styles based on user's age ({user_profile.age}) and occupation ({user_profile.occupation})
+2. Consider season ({user_profile.season}) and occasion ({user_profile.occasion})
+3. Budget: {user_profile.budget}
+4. If user has hobbies: {', '.join(user_profile.hobbies)}, consider how these hobbies affect outfit choices
 
-请返回JSON格式:
+Please return JSON format:
 {{
     "category": "{self.category}",
-    "items": ["具体推荐单品1", "具体推荐单品2"],
-    "colors": ["颜色1", "颜色2"],
-    "styles": ["风格1", "风格2"],
-    "reasons": ["推荐理由1", "推荐理由2"],
-    "price_range": "价格区间"
+    "items": ["recommended item 1", "recommended item 2"],
+    "colors": ["color 1", "color 2"],
+    "styles": ["style 1", "style 2"],
+    "reasons": ["reason 1", "reason 2"],
+    "price_range": "price range"
 }}
 
-只返回JSON。
+Only return JSON.
 """
         return prompt
     
     def _parse_response(self, response: str) -> OutfitRecommendation:
-        """解析响应"""
+        """Parse response"""
         try:
             start = response.find('{')
             end = response.rfind('}') + 1
@@ -190,18 +190,18 @@ class OutfitSubAgent:
         
         return OutfitRecommendation(
             category=self.category,
-            items=["待推荐"],
-            colors=["待定"],
-            reasons=["等待处理"]
+            items=["Pending"],
+            colors=["TBD"],
+            reasons=["Waiting"]
         )
 
 
 class OutfitAgentFactory:
-    """穿搭Agent工厂 (使用 AHP 协议)"""
+    """Outfit Agent Factory (using AHP Protocol)"""
     
     @staticmethod
     def create_agents(llm: LocalLLM) -> Dict[str, OutfitSubAgent]:
-        """创建所有穿搭Agent"""
+        """Create all outfit agents"""
         return {
             "agent_head": OutfitSubAgent("agent_head", "head", llm),
             "agent_top": OutfitSubAgent("agent_top", "top", llm),

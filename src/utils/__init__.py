@@ -1,7 +1,7 @@
 """
-Utils 模块
+Utils Module
 """
-from .llm import create_llm, LocalLLM, MockLLM
-from .config import config, Config
+from .config import config
+from .llm import LocalLLM, create_llm, MockLLM
 
-__all__ = ["create_llm", "LocalLLM", "MockLLM", "config", "Config"]
+__all__ = ["config", "LocalLLM", "create_llm", "MockLLM"]

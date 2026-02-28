@@ -1,5 +1,5 @@
 """
-核心数据模型 - 穿搭推荐系统
+Core Data Models - Outfit Recommendation System
 """
 from dataclasses import dataclass, field
 from enum import Enum
@@ -9,6 +9,7 @@ import uuid
 
 
 class TaskStatus(str, Enum):
+    """Task status"""
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
@@ -16,6 +17,7 @@ class TaskStatus(str, Enum):
 
 
 class Gender(str, Enum):
+    """Gender enum"""
     MALE = "male"
     FEMALE = "female"
     OTHER = "other"
@@ -23,44 +25,46 @@ class Gender(str, Enum):
 
 @dataclass
 class UserProfile:
-    """用户画像"""
+    """User profile"""
     name: str
     gender: Gender
     age: int
-    occupation: str  # 职业
-    hobbies: List[str] = field(default_factory=list)  # 爱好
-    mood: str = "normal"  # 心情: happy/normal/depressed/excited
-    style_preference: str = ""  # 风格偏好
-    budget: str = "medium"  # 预算: low/medium/high
-    season: str = "spring"  # 季节
-    occasion: str = "daily"  # 场合
+    occupation: str  # Profession
+    hobbies: List[str] = field(default_factory=list)  # Hobbies
+    mood: str = "normal"  # Mood: happy/normal/depressed/excited
+    style_preference: str = ""  # Style preference
+    budget: str = "medium"  # Budget: low/medium/high
+    season: str = "spring"  # Season
+    occasion: str = "daily"  # Occasion
     
     def to_prompt_context(self) -> str:
-        """转换为提示词上下文"""
-        hobbies_str = "、".join(self.hobbies) if self.hobbies else "无"
+        """Convert to prompt context"""
+        hobbies_str = ", ".join(self.hobbies) if self.hobbies else "none"
         mood_desc = {
-            "happy": "心情愉悦",
-            "normal": "心情一般",
-            "depressed": "心情压抑",
-            "excited": "心情激动"
-        }.get(self.mood, "心情一般")
+            "happy": "happy",
+            "normal": "neutral",
+            "depressed": "depressed",
+            "excited": "excited"
+        }.get(self.mood, "neutral")
         
-        return f"""用户信息:
-- 姓名: {self.name}
-- 性别: {"男" if self.gender == Gender.MALE else "女"}
-- 年龄: {self.age}岁
-- 职业: {self.occupation}
-- 爱好: {hobbies_str}
-- 今日心情: {mood_desc}
-- 风格偏好: {self.style_preference or "无特定偏好"}
-- 预算: {self.budget}
-- 季节: {self.season}
-- 场合: {self.occasion}"""
+        gender_str = "Male" if self.gender == Gender.MALE else "Female"
+        
+        return f"""User Info:
+- Name: {self.name}
+- Gender: {gender_str}
+- Age: {self.age}
+- Occupation: {self.occupation}
+- Hobbies: {hobbies_str}
+- Today's Mood: {mood_desc}
+- Style Preference: {self.style_preference or "no specific preference"}
+- Budget: {self.budget}
+- Season: {self.season}
+- Occasion: {self.occasion}"""
 
 
 @dataclass
 class OutfitTask:
-    """穿搭任务"""
+    """Outfit task"""
     task_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     session_id: str = ""
     category: str = ""  # head/top/bottom/shoes
@@ -75,7 +79,7 @@ class OutfitTask:
 
 @dataclass
 class OutfitRecommendation:
-    """穿搭推荐结果"""
+    """Outfit recommendation result"""
     category: str  # head/top/bottom/shoes
     items: List[str] = field(default_factory=list)
     colors: List[str] = field(default_factory=list)
@@ -84,22 +88,22 @@ class OutfitRecommendation:
     price_range: str = ""
     
     def to_display(self) -> str:
-        """格式化显示"""
-        lines = [f"【{self.category}】"]
+        """Format for display"""
+        lines = [f"[{self.category.upper()}]"]
         if self.items:
-            lines.append(f"  推荐: {', '.join(self.items)}")
+            lines.append(f"  Items: {', '.join(self.items)}")
         if self.colors:
-            lines.append(f"  颜色: {', '.join(self.colors)}")
+            lines.append(f"  Colors: {', '.join(self.colors)}")
         if self.styles:
-            lines.append(f"  风格: {', '.join(self.styles)}")
+            lines.append(f"  Styles: {', '.join(self.styles)}")
         if self.reasons:
-            lines.append(f"  理由: {'; '.join(self.reasons)}")
+            lines.append(f"  Reasons: {'; '.join(self.reasons)}")
         return "\n".join(lines)
 
 
 @dataclass
 class OutfitResult:
-    """完整穿搭结果"""
+    """Complete outfit result"""
     session_id: str
     user_profile: UserProfile
     head: Optional[OutfitRecommendation] = None
@@ -110,11 +114,11 @@ class OutfitResult:
     summary: str = ""
     
     def to_display(self) -> str:
-        """完整展示"""
+        """Complete display"""
         lines = [
             "=" * 50,
-            f"👤 用户: {self.user_profile.name} ({self.user_profile.age}岁 {self.user_profile.occupation})",
-            f"📝 今日心情: {self.user_profile.mood} | 爱好: {', '.join(self.user_profile.hobbies)}",
+            f"User: {self.user_profile.name} ({self.user_profile.age} {self.user_profile.occupation})",
+            f"Mood: {self.user_profile.mood} | Hobbies: {', '.join(self.user_profile.hobbies)}",
             "=" * 50,
             ""
         ]
@@ -125,9 +129,9 @@ class OutfitResult:
                 lines.append("")
         
         if self.overall_style:
-            lines.append(f"🎯 整体风格: {self.overall_style}")
+            lines.append(f"Overall Style: {self.overall_style}")
         if self.summary:
-            lines.append(f"📝 总结: {self.summary}")
+            lines.append(f"Summary: {self.summary}")
         
         lines.append("=" * 50)
         return "\n".join(lines)

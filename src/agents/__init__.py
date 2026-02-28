@@ -1,8 +1,9 @@
 """
-Agents 模块 - Leader + Sub Agents (AHP 协议)
+Agents Module - Leader + Sub Agents (AHP Protocol)
 """
 from .leader_agent import LeaderAgent
 from .sub_agent import OutfitSubAgent, OutfitAgentFactory
+from .resources import AgentResources, AgentResourceFactory, PrivateContext
 from ..core.models import UserProfile, Gender, OutfitRecommendation, OutfitResult
 from ..utils.llm import create_llm, LocalLLM
 
@@ -10,6 +11,9 @@ __all__ = [
     "LeaderAgent",
     "OutfitSubAgent", 
     "OutfitAgentFactory",
+    "AgentResources",
+    "AgentResourceFactory",
+    "PrivateContext",
     "UserProfile",
     "Gender",
     "OutfitRecommendation",

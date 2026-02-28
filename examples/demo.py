@@ -1,5 +1,5 @@
 """
-穿搭推荐系统 Demo
+Outfit Recommendation System Demo
 """
 import os
 import sys
@@ -12,58 +12,58 @@ from src.storage import get_storage
 
 
 def main():
-    """主函数"""
+    """Main function"""
     print("\n" + "=" * 60)
-    print("🌟 穿搭推荐系统 - AHP 协议 + pgvector 存储")
+    print("Outfit Recommendation System - AHP Protocol + pgvector Storage")
     print("=" * 60)
     
-    # 1. 初始化存储
-    print("\n[1] 初始化存储层 (pgvector)...")
+    # 1. Initialize storage
+    print("\n[1] Initializing storage layer (pgvector)...")
     storage = get_storage()
-    print("   ✅ 存储层就绪")
+    print("   OK Storage layer ready")
     
-    # 2. 创建 LLM
-    print("\n[2] 初始化 LLM...")
+    # 2. Create LLM
+    print("\n[2] Initializing LLM...")
     llm = create_llm(provider="local")
     print(f"   {llm}")
     
     if not llm.available:
-        print("   ❌ 本地模型未连接，请启动 gpt-oss-20b 服务")
+        print("   FAIL Local model not connected, please start gpt-oss-20b service")
         return
     
-    # 3. 重置消息队列
+    # 3. Reset message queue
     from src.protocol import get_message_queue
     mq = get_message_queue()
     
-    # 4. 创建 Leader Agent
-    print("\n[3] 初始化 Leader Agent...")
+    # 4. Create Leader Agent
+    print("\n[3] Initializing Leader Agent...")
     leader = LeaderAgent(llm)
     
-    # 5. 用户输入
-    user_input = "小明，性别男，22岁，厨师，爱好旅游，今天性情比较压抑"
-    print(f"\n📝 用户输入: {user_input}")
+    # 5. User input
+    user_input = "Xiao Ming, male, 22 years old, chef, likes traveling, feeling depressed today"
+    print(f"\nUser Input: {user_input}")
     
-    # 6. 创建 Sub Agents 并启动
-    print("\n[4] 启动 Sub Agents (AHP 协议)...")
+    # 6. Create and start Sub Agents
+    print("\n[4] Starting Sub Agents (AHP Protocol)...")
     agents = OutfitAgentFactory.create_agents(llm)
     for agent in agents.values():
         agent.start()
     
     time.sleep(0.5)
     
-    # 7. 处理请求 (完整流程: 解析 -> 分发 -> 收集 -> 汇总 -> 存储)
-    print("\n[5] 开始处理...")
+    # 7. Process request (full workflow: parse -> dispatch -> collect -> aggregate -> store)
+    print("\n[5] Starting processing...")
     result = leader.process(user_input)
     
-    # 8. 停止 Agents
+    # 8. Stop Agents
     for agent in agents.values():
         agent.stop()
     
-    # 9. 存储结果到 pgvector
-    print("\n[6] 存储到数据库...")
+    # 9. Store results to pgvector
+    print("\n[6] Storing to database...")
     session_id = result.session_id
     
-    # 存储用户画像
+    # Store user profile
     storage.save_user_profile(session_id, {
         "name": result.user_profile.name,
         "gender": result.user_profile.gender.value,
@@ -76,7 +76,7 @@ def main():
         "occasion": result.user_profile.occasion
     })
     
-    # 存储穿搭推荐
+    # Store outfit recommendations
     for part in [result.head, result.top, result.bottom, result.shoes]:
         if part:
             storage.save_outfit_recommendation(
@@ -84,22 +84,22 @@ def main():
                 part.styles, part.reasons, part.price_range
             )
     
-    print("   ✅ 结果已存储")
+    print("   OK Results stored")
     
-    # 10. 展示结果
+    # 10. Display results
     print("\n" + result.to_display())
     
-    # 11. 验证存储
-    print("\n[7] 验证存储...")
+    # 11. Verify storage
+    print("\n[7] Verifying storage...")
     saved_profile = storage.get_user_profile(session_id)
     saved_outfits = storage.get_outfit_recommendations(session_id)
-    print(f"   ✅ 已保存用户画像: {saved_profile['name']}")
-    print(f"   ✅ 已保存穿搭推荐: {len(saved_outfits)} 条")
+    print(f"   OK Saved user profile: {saved_profile['name']}")
+    print(f"   OK Saved outfit recommendations: {len(saved_outfits)} items")
     
     storage.close()
     
     print("\n" + "=" * 60)
-    print("✅ 完成!")
+    print("DONE!")
     print("=" * 60)
 
 

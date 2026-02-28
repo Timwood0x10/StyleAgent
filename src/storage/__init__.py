@@ -1,6 +1,6 @@
 """
-Storage 模块 - PostgreSQL + pgvector
+Storage Module - PostgreSQL + pgvector
 """
-from .postgres import StorageLayer, get_storage
+from .postgres import StorageLayer, get_storage, Database
 
-__all__ = ["StorageLayer", "get_storage"]
+__all__ = ["StorageLayer", "get_storage", "Database"]

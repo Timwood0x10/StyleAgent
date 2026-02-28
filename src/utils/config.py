@@ -1,15 +1,15 @@
 """
-配置管理 - 从 .env 加载
+Configuration Management - Load from .env
 """
 import os
 from dotenv import load_dotenv
 
-# 加载 .env 文件
+# Load .env file
 load_dotenv()
 
 
 class Config:
-    """配置类"""
+    """Configuration class"""
     
     # PostgreSQL
     PG_HOST = os.getenv("PG_HOST", "localhost")

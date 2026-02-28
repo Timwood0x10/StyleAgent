@@ -1,5 +1,5 @@
 """
-Leader Agent - 用户画像解析与任务分发 (使用 AHP 协议)
+Leader Agent - User Profile Parsing and Task Distribution (using AHP Protocol)
 """
 import json
 import uuid
@@ -11,20 +11,20 @@ from ..utils.llm import LocalLLM
 from ..protocol import get_message_queue, AHPSender
 
 
-SYSTEM_PROMPT = """你是一位专业的时尚穿搭顾问，擅长根据用户的个人信息和心情推荐合适的穿搭。
+SYSTEM_PROMPT = """You are a professional fashion consultant, skilled at recommending appropriate outfits based on user information and mood.
 
-你需要:
-1. 解析用户信息，提取关键特征
-2. 根据用户的心情(压抑/愉悦/一般)调整穿搭风格
-3. 考虑用户的职业和爱好来推荐
-4. 给出专业、贴心的建议
+You need to:
+1. Parse user information, extract key features
+2. Adjust outfit style based on user's mood (depressed/happy/normal)
+3. Consider user's occupation and hobbies for recommendations
+4. Provide professional and thoughtful suggestions
 
-请用JSON格式回复。
+Please reply in JSON format.
 """
 
 
 class LeaderAgent:
-    """主Agent - 用户画像解析与任务分发 (通过 AHP 协议)"""
+    """Main Agent - User profile parsing and task distribution (via AHP Protocol)"""
     
     def __init__(self, llm: LocalLLM):
         self.llm = llm
@@ -34,56 +34,56 @@ class LeaderAgent:
         self.session_id = ""
     
     def process(self, user_input: str) -> OutfitResult:
-        """处理用户输入 - 完整流程"""
+        """Process user input - full workflow"""
         print("\n" + "=" * 50)
-        print("🔵 Leader Agent 开始处理")
+        print("Leader Agent Processing")
         print("=" * 50)
         
-        # 1. 解析用户画像
-        print("\n[1] 解析用户画像...")
+        # 1. Parse user profile
+        print("\n[1] Parsing user profile...")
         profile = self.parse_user_profile(user_input)
         self.session_id = str(uuid.uuid4())
         
-        # 2. 创建任务
-        print(f"\n[2] 创建穿搭任务 (分发协议: AHP)")
+        # 2. Create tasks
+        print(f"\n[2] Creating outfit tasks (protocol: AHP)")
         tasks = self.create_tasks(profile)
         
-        # 3. 通过 AHP 协议分发任务给各个 Sub Agent
-        print(f"\n[3] 通过 AHP 协议分发任务...")
+        # 3. Dispatch tasks to Sub Agents via AHP
+        print(f"\n[3] Dispatching tasks via AHP protocol...")
         self._dispatch_tasks_via_ahp(tasks, profile)
         
-        # 4. 收集结果
-        print(f"\n[4] 等待 Sub Agent 结果...")
+        # 4. Collect results
+        print(f"\n[4] Waiting for Sub Agent results...")
         results = self._collect_results(tasks)
         
-        # 5. 汇总
-        print(f"\n[5] 汇总结果...")
+        # 5. Aggregate
+        print(f"\n[5] Aggregating results...")
         final = self.aggregate_results(profile, results)
         
         return final
     
     def parse_user_profile(self, user_input: str) -> UserProfile:
-        """解析用户输入为用户画像"""
+        """Parse user input to user profile"""
         
-        prompt = f"""请从以下用户输入中提取用户画像信息，返回JSON格式:
+        prompt = f"""Extract user profile information from the following input, return JSON format:
 
-输入: {user_input}
+Input: {user_input}
 
-请返回以下格式的JSON:
+Please return JSON in the following format:
 {{
-    "name": "姓名",
+    "name": "name",
     "gender": "male/female/other",
-    "age": 年龄数字,
-    "occupation": "职业",
-    "hobbies": ["爱好1", "爱好2"],
+    "age": age_number,
+    "occupation": "occupation",
+    "hobbies": ["hobby1", "hobby2"],
     "mood": "happy/normal/depressed/excited",
-    "style_preference": "风格偏好(可选)",
+    "style_preference": "style preference (optional)",
     "budget": "low/medium/high",
     "season": "spring/summer/autumn/winter",
     "occasion": "daily/work/date/party"
 }}
 
-只返回JSON，不要其他内容。
+Only return JSON, no other content.
 """
         
         response = self.llm.invoke(prompt, SYSTEM_PROMPT)
@@ -94,7 +94,7 @@ class LeaderAgent:
             if start >= 0 and end > start:
                 data = json.loads(response[start:end])
                 return UserProfile(
-                    name=data.get("name", "用户"),
+                    name=data.get("name", "User"),
                     gender=Gender(data.get("gender", "male")),
                     age=int(data.get("age", 25)),
                     occupation=data.get("occupation", ""),
@@ -111,40 +111,49 @@ class LeaderAgent:
         return self._fallback_parse(user_input)
     
     def _fallback_parse(self, user_input: str) -> UserProfile:
-        """降级解析"""
+        """Fallback parsing"""
         import re
         
-        name = "用户"
+        name = "User"
         gender = Gender.MALE
         age = 25
         occupation = ""
         hobbies = []
         mood = "normal"
         
+        # Check for Chinese gender keywords
         if "男" in user_input:
             gender = Gender.MALE
         elif "女" in user_input:
             gender = Gender.FEMALE
         
+        # Check for mood keywords
         if "压抑" in user_input:
             mood = "depressed"
         elif "开心" in user_input or "愉悦" in user_input:
             mood = "happy"
         
+        # Extract age
         age_match = re.search(r'(\d+)岁', user_input)
         if age_match:
             age = int(age_match.group(1))
         
-        occupations = ["厨师", "医生", "教师", "程序员", "设计师", "学生"]
-        for occ in occupations:
-            if occ in user_input:
-                occupation = occ
+        # Extract occupation
+        occupations = ["chef", "doctor", "teacher", "programmer", "designer", "student"]
+        occ_map = {"厨师": "chef", "医生": "doctor", "教师": "teacher", 
+                  "程序员": "programmer", "设计师": "designer", "学生": "student"}
+        for cn, en in occ_map.items():
+            if cn in user_input:
+                occupation = en
                 break
         
+        # Extract hobbies
         hobby_words = ["旅游", "运动", "音乐", "阅读", "游戏", "美食"]
-        for h in hobby_words:
-            if h in user_input:
-                hobbies.append(h)
+        hobby_map = {"旅游": "travel", "运动": "sports", "音乐": "music", 
+                    "阅读": "reading", "游戏": "gaming", "美食": "food"}
+        for cn, en in hobby_map.items():
+            if cn in user_input:
+                hobbies.append(en)
         
         return UserProfile(
             name=name, gender=gender, age=age, occupation=occupation,
@@ -152,13 +161,13 @@ class LeaderAgent:
         )
     
     def create_tasks(self, user_profile: UserProfile) -> List[OutfitTask]:
-        """创建穿搭任务"""
+        """Create outfit tasks"""
         
         task_configs = [
-            {"category": "head", "agent_id": "agent_head", "desc": "帽子和饰品推荐"},
-            {"category": "top", "agent_id": "agent_top", "desc": "上身穿搭推荐"},
-            {"category": "bottom", "agent_id": "agent_bottom", "desc": "裤子推荐"},
-            {"category": "shoes", "agent_id": "agent_shoes", "desc": "鞋子推荐"}
+            {"category": "head", "agent_id": "agent_head", "desc": "head accessories recommendation"},
+            {"category": "top", "agent_id": "agent_top", "desc": "top clothing recommendation"},
+            {"category": "bottom", "agent_id": "agent_bottom", "desc": "bottom clothing recommendation"},
+            {"category": "shoes", "agent_id": "agent_shoes", "desc": "shoes recommendation"}
         ]
         
         tasks = []
@@ -169,25 +178,25 @@ class LeaderAgent:
             )
             task.assignee_agent_id = config["agent_id"]
             tasks.append(task)
-            print(f"   ✓ {config['category']} → {config['agent_id']}")
+            print(f"   OK {config['category']} -> {config['agent_id']}")
         
         self.tasks = tasks
         return tasks
     
     def _dispatch_tasks_via_ahp(self, tasks: List[OutfitTask], profile: UserProfile):
-        """通过 AHP 协议分发任务"""
+        """Dispatch tasks via AHP protocol"""
         
-        # 类别描述映射
+        # Category description mapping
         category_desc = {
-            "head": "帽子和饰品",
-            "top": "上身穿搭",
-            "bottom": "裤子",
-            "shoes": "鞋子"
+            "head": "head accessories",
+            "top": "top clothing",
+            "bottom": "bottom clothing",
+            "shoes": "shoes"
         }
         
         for task in tasks:
             desc = category_desc.get(task.category, task.category)
-            # 构建精简指令 (Token 控制)
+            # Build compact instruction (Token control)
             payload = {
                 "category": task.category,
                 "description": desc,
@@ -201,10 +210,10 @@ class LeaderAgent:
                     "season": profile.season,
                     "budget": profile.budget
                 },
-                "instruction": f"请为{profile.name}推荐{desc}，考虑他今天心情{profile.mood}"
+                "instruction": f"Please recommend {desc} for {profile.name}, considering their mood is {profile.mood}"
             }
             
-            # 通过 AHP 协议发送
+            # Send via AHP protocol
             self.sender.send_task(
                 target_agent=task.assignee_agent_id,
                 task_id=task.task_id,
@@ -214,7 +223,7 @@ class LeaderAgent:
             )
     
     def _collect_results(self, tasks: List[OutfitTask], timeout: int = 60) -> Dict[str, OutfitRecommendation]:
-        """收集各 Agent 的结果"""
+        """Collect results from all agents"""
         
         import time
         results = {}
@@ -222,7 +231,7 @@ class LeaderAgent:
         received = set()
         
         while len(received) < len(tasks) and (time.time() - start) < timeout:
-            # Leader 监听所有结果
+            # Leader monitors all results
             for agent_id in [t.assignee_agent_id for t in tasks if t.assignee_agent_id not in received]:
                 msg = self.mq.receive("leader", timeout=2)
                 if msg and msg.method == "RESULT":
@@ -237,7 +246,7 @@ class LeaderAgent:
                         price_range=result_data.get("price_range", "")
                     )
                     received.add(agent_id)
-                    print(f"   ✓ 收到 {category} 结果")
+                    print(f"   OK Received {category} result")
         
         return results
     
@@ -246,24 +255,24 @@ class LeaderAgent:
         user_profile: UserProfile,
         results: Dict[str, OutfitRecommendation]
     ) -> OutfitResult:
-        """汇总结果"""
+        """Aggregate results"""
         
-        style_prompt = f"""根据以下用户画像和穿搭推荐，给出整体风格建议:
+        style_prompt = f"""Based on the following user profile and outfit recommendations, provide overall style suggestions:
 
-用户画像:
+User Profile:
 {user_profile.to_prompt_context()}
 
-各部分推荐:
+Recommendations:
 {json.dumps({k: {"items": v.items, "colors": v.colors, "styles": v.styles} for k, v in results.items()}, ensure_ascii=False)}
 
-请给出:
-1. 整体风格描述
-2. 一句话总结
+Please provide:
+1. Overall style description
+2. One sentence summary
 
-返回JSON格式:
+Return JSON format:
 {{
-    "overall_style": "风格描述",
-    "summary": "总结"
+    "overall_style": "style description",
+    "summary": "summary"
 }}
 """
         

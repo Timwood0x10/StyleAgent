@@ -1,4 +1,3 @@
 """
-iFlow 穿搭推荐多Agent系统
+iFlow Multi-Agent Outfit Recommendation System
 """
-__version__ = "0.1.0"
