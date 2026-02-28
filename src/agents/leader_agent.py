@@ -14,7 +14,11 @@ from ..core.models import (
     TaskStatus,
 )
 from ..utils.llm import LocalLLM
+from ..utils import get_logger
 from ..protocol import get_message_queue, AHPSender
+
+# Logger for this module
+logger = get_logger(__name__)
 
 
 SYSTEM_PROMPT = """You are a professional fashion consultant, skilled at recommending appropriate outfits based on user information and mood.
@@ -41,31 +45,29 @@ class LeaderAgent:
 
     def process(self, user_input: str) -> OutfitResult:
         """Process user input - full workflow"""
-        print("\n" + "=" * 50)
-        print("Leader Agent Processing")
-        print("=" * 50)
+        logger.info("Leader Agent starting processing")
+        logger.debug(f"User input: {user_input}")
 
         # 1. Parse user profile
-        print("\n[1] Parsing user profile...")
+        logger.info("Parsing user profile")
         profile = self.parse_user_profile(user_input)
         self.session_id = str(uuid.uuid4())
 
         # 2. Create tasks
-        print(f"\n[2] Creating outfit tasks (protocol: AHP)")
+        logger.info("Creating outfit tasks")
         tasks = self.create_tasks(profile)
 
         # 3. Dispatch tasks to Sub Agents via AHP
-        print(f"\n[3] Dispatching tasks via AHP protocol...")
+        logger.info("Dispatching tasks via AHP protocol")
         self._dispatch_tasks_via_ahp(tasks, profile)
 
         # 4. Collect results
-        print(f"\n[4] Waiting for Sub Agent results...")
+        logger.info("Waiting for Sub Agent results")
         results = self._collect_results(tasks)
 
         # 5. Aggregate
-        print(f"\n[5] Aggregating results...")
+        logger.info("Aggregating results")
         final = self.aggregate_results(profile, results)
-
         return final
 
     def parse_user_profile(self, user_input: str) -> UserProfile:
@@ -112,7 +114,7 @@ Only return JSON, no other content.
                     occasion=data.get("occasion", "daily"),
                 )
         except Exception as e:
-            print(f"Parse error: {e}")
+            logger.warning(f"Failed to parse user profile, using fallback: {e}")
 
         return self._fallback_parse(user_input)
 
@@ -215,7 +217,7 @@ Only return JSON, no other content.
             task = OutfitTask(category=config["category"], user_profile=user_profile)
             task.assignee_agent_id = config["agent_id"]
             tasks.append(task)
-            print(f"   OK {config['category']} -> {config['agent_id']}")
+            logger.debug(f"Created task: {config['category']} -> {config['agent_id']}")
 
         self.tasks = tasks
         return tasks
@@ -290,7 +292,7 @@ Only return JSON, no other content.
                         price_range=result_data.get("price_range", ""),
                     )
                     received.add(agent_id)
-                    print(f"   OK Received {category} result")
+                    logger.info(f"Received result from {category}")
 
         return results
 

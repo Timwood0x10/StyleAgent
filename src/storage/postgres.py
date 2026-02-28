@@ -10,6 +10,10 @@ from typing import Any, Dict, List, Optional
 
 import psycopg2
 from ..utils.config import config
+from ..utils import get_logger
+
+# Logger for this module
+logger = get_logger(__name__)
 
 
 class Database:
@@ -22,6 +26,7 @@ class Database:
     def conn(self):
         """Get database connection"""
         if self._conn is None:
+            logger.info(f"Connecting to database: {config.PG_HOST}:{config.PG_PORT}/{config.PG_DATABASE}")
             self._conn = psycopg2.connect(
                 host=config.PG_HOST,
                 port=config.PG_PORT,
@@ -29,20 +34,29 @@ class Database:
                 user=config.PG_USER,
                 password=config.PG_PASSWORD,
             )
+            logger.info("Database connection established")
         return self._conn
 
     def execute(self, sql: str, params: tuple = None):
         """Execute SQL"""
-        cursor = self.conn.cursor()
-        cursor.execute(sql, params)
-        self.conn.commit()
-        return cursor
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(sql, params)
+            self.conn.commit()
+            return cursor
+        except Exception as e:
+            logger.error(f"Database execute error: {e}")
+            raise
 
     def fetch_one(self, sql: str, params: tuple = None):
         """Fetch one row"""
-        cursor = self.conn.cursor()
-        cursor.execute(sql, params)
-        return cursor.fetchone()
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(sql, params)
+            return cursor.fetchone()
+        except Exception as e:
+            logger.error(f"Database fetch_one error: {e}")
+            raise
 
     def fetch_all(self, sql: str, params: tuple = None):
         """Fetch all rows"""

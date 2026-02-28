@@ -7,7 +7,11 @@ import threading
 from typing import Dict, Any, Optional
 from ..core.models import UserProfile, OutfitRecommendation, OutfitTask, TaskStatus
 from ..utils.llm import LocalLLM
+from ..utils import get_logger
 from ..protocol import get_message_queue, AHPReceiver, AHPSender
+
+# Logger for this module
+logger = get_logger(__name__)
 
 
 # System prompts for each category
@@ -59,7 +63,7 @@ class OutfitSubAgent:
         self._running = True
         thread = threading.Thread(target=self._run_loop, daemon=True)
         thread.start()
-        print(f"   🟢 {self.agent_id} started (listening...)")
+        logger.info(f"{self.agent_id} started (listening)")
 
     def stop(self):
         """Stop agent"""
@@ -70,9 +74,7 @@ class OutfitSubAgent:
         while self._running:
             msg = self.receiver.wait_for_task(timeout=5)
             if msg:
-                print(
-                    f"\n   📬 [{self.agent_id}] received task: {msg.payload.get('category')}"
-                )
+                logger.info(f"[{self.agent_id}] received task: {msg.payload.get('category')}")
                 self._handle_task(msg)
 
     def _handle_task(self, msg):
@@ -121,13 +123,13 @@ class OutfitSubAgent:
                 status="success",
             )
 
-            print(f"   ✅ [{self.agent_id}] task completed")
+            logger.info(f"[{self.agent_id}] task completed")
 
         except Exception as e:
             self.sender.send_result(
                 "leader", task_id, session_id, {"error": str(e)}, status="failed"
             )
-            print(f"   ❌ [{self.agent_id}] task failed: {e}")
+            logger.error(f"[{self.agent_id}] task failed: {e}")
 
     def _recommend(self, user_profile: UserProfile) -> OutfitRecommendation:
         """Execute recommendation"""
@@ -197,7 +199,7 @@ Only return JSON.
                     price_range=data.get("price_range", ""),
                 )
         except Exception as e:
-            print(f"Parse error: {e}")
+            logger.warning(f"Failed to parse outfit recommendation, using fallback: {e}")
 
         return OutfitRecommendation(
             category=self.category,

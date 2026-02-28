@@ -38,7 +38,7 @@ Edit `.env`:
 # PostgreSQL + pgvector (Docker)
 PG_HOST=localhost
 PG_PORT=5432
-PG_DATABASE=iflow
+PG_DATABASE=user
 PG_USER=postgres
 PG_PASSWORD=your_password
 
@@ -54,7 +54,7 @@ LLM_MODEL=gpt-oss:20b
 docker run -d --name pgvector \
   -e POSTGRES_PASSWORD=your_password \
   -e POSTGRES_USER=postgres \
-  -e POSTGRES_DB=iflow \
+  -e POSTGRES_DB=user \
   -p 5432:5432 \
   pgvector/pgvector:pg18
 ```

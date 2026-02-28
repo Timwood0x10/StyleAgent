@@ -17,6 +17,10 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, Optional
+from ..utils import get_logger
+
+# Logger for this module
+logger = get_logger(__name__)
 
 
 # AHP Methods
@@ -207,9 +211,7 @@ class AHPSender:
             token_limit=token_limit,
         )
         self.mq.send(target_agent, msg)
-        print(
-            f"   SEND [->{target_agent}] TASK: {payload.get('category', 'unknown')} (token_limit: {token_limit})"
-        )
+        logger.debug(f"SEND [->{target_agent}] TASK: {payload.get('category', 'unknown')} (token_limit: {token_limit})")
         return msg
 
     def send_result(
@@ -277,7 +279,7 @@ class AHPReceiver:
         """Receive message"""
         msg = self.mq.receive(self.agent_id, timeout)
         if msg:
-            print(f"   RECV [<-{self.agent_id}] {msg.method}")
+            logger.debug(f"RECV [<-{self.agent_id}] {msg.method}")
             self.mq.update_heartbeat(self.agent_id)
         return msg
 

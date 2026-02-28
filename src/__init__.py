@@ -1,3 +1,3 @@
 """
-iFlow Multi-Agent Outfit Recommendation System
+Style Multi-Agent Outfit Recommendation System
 """
