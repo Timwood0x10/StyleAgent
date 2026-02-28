@@ -1,6 +1,7 @@
 """
 Agents Module - Leader + Sub Agents (AHP Protocol)
 """
+
 from .leader_agent import LeaderAgent
 from .sub_agent import OutfitSubAgent, OutfitAgentFactory
 from .resources import AgentResources, AgentResourceFactory, PrivateContext
@@ -9,7 +10,7 @@ from ..utils.llm import create_llm, LocalLLM
 
 __all__ = [
     "LeaderAgent",
-    "OutfitSubAgent", 
+    "OutfitSubAgent",
     "OutfitAgentFactory",
     "AgentResources",
     "AgentResourceFactory",
@@ -19,5 +20,5 @@ __all__ = [
     "OutfitRecommendation",
     "OutfitResult",
     "create_llm",
-    "LocalLLM"
+    "LocalLLM",
 ]

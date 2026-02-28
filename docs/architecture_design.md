@@ -1,6 +1,6 @@
-# 多Agent协作系统架构设计
+# Multi-Agent Collaboration System Architecture Design
 
-## 1. 系统架构图
+## 1. System Architecture Diagram
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -48,13 +48,13 @@
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-## 2. 核心模块设计
+## 2. Core Module Design
 
-### 2.1 Leader Agent 模块
+### 2.1 Leader Agent Module
 
 ```python
 class LeaderAgent:
-    """主Agent: 任务统筹与汇总"""
+    """Main Agent: Task Coordination and Aggregation"""
     
     def __init__(self, llm: ChatModel, task_registry: TaskRegistry):
         self.llm = llm
@@ -62,27 +62,27 @@ class LeaderAgent:
         self.global_context = GlobalContext()
     
     def process(self, user_input: str) -> str:
-        # 1. 理解用户意图
-        # 2. 分解任务为子任务
-        # 3. 分发给 Sub-Agent
-        # 4. 收集结果并校验
-        # 5. 汇总输出
+        # 1. Understand user intent
+        # 2. Decompose task into subtasks
+        # 3. Dispatch to Sub-Agent
+        # 4. Collect and validate results
+        # 5. Aggregate output
         pass
     
     def decompose_task(self, task: str) -> List[Task]:
-        """任务分解"""
+        """Task decomposition"""
         pass
     
     def aggregate_results(self, results: List[TaskResult]) -> str:
-        """结果聚合"""
+        """Result aggregation"""
         pass
 ```
 
-### 2.2 Sub Agent 模块
+### 2.2 Sub Agent Module
 
 ```python
 class SubAgent:
-    """子Agent: 独立执行子任务"""
+    """Sub Agent: Independent subtask execution"""
     
     def __init__(
         self, 
@@ -101,70 +101,70 @@ class SubAgent:
         self.storage = storage
     
     def execute_task(self, task: Task) -> TaskResult:
-        """执行任务"""
+        """Execute task"""
         pass
     
     def report_progress(self, progress: Progress):
-        """报告进度"""
+        """Report progress"""
         pass
 ```
 
-### 2.3 任务注册表 (Task Registry)
+### 2.3 Task Registry
 
 ```python
 class TaskRegistry:
-    """任务注册与状态管理"""
+    """Task registration and status management"""
     
     def __init__(self, db: Database):
         self.db = db
     
     def register_task(self, task: Task) -> str:
-        """注册新任务,返回task_id"""
+        """Register new task, return task_id"""
         pass
     
     def claim_task(self, agent_id: str, task_id: str) -> bool:
-        """抢单任务(确保唯一执行)"""
+        """Claim task (ensure unique execution)"""
         pass
     
     def update_status(self, task_id: str, status: TaskStatus):
-        """更新任务状态"""
+        """Update task status"""
         pass
     
     def get_task_status(self, task_id: str) -> TaskStatus:
-        """获取任务状态"""
+        """Get task status"""
         pass
 ```
 
-### 2.4 AHP 通信协议
+### 2.4 AHP Communication Protocol
 
 ```python
 class AHPProtocol:
     """Agent HTTP-like Protocol"""
     
-    # 请求方法
-    METHOD_TASK = "TASK"      # 分发任务
-    METHOD_RESULT = "RESULT"  # 返回结果
-    METHOD_PROGRESS = "PROGRESS"  # 进度汇报
-    METHOD_HEARTBEAT = "HEARTBEAT"  # 心跳
+    # Request methods
+    METHOD_TASK = "TASK"      # Dispatch task
+    METHOD_RESULT = "RESULT"  # Return result
+    METHOD_PROGRESS = "PROGRESS"  # Progress report
+    METHOD_HEARTBEAT = "HEARTBEAT"  # Heartbeat
     
     def __init__(self, message_queue: MessageQueue):
         self.mq = message_queue
     
     def send_task(self, target_agent: str, task: Task, token_limit: int):
-        """发送任务给Agent"""
+        """Send task to Agent"""
         pass
     
     def receive_result(self, timeout: int = 30) -> TaskResult:
-        """接收结果"""
+        """Receive result"""
         pass
 ```
 
-### 2.5 数据存储层
+### 2.5 Data Storage Layer
 
 ```sql
--- PostgreSQL 表结构设计
+-- PostgreSQL table design
 
--- 1. 向量存储表 (语义数据)
+-- 1. Vector storage table (semantic data)
 CREATE TABLE semantic_vectors (
     id SERIAL PRIMARY KEY,
     session_id UUID NOT NULL,
@@ -175,7 +175,7 @@ CREATE TABLE semantic_vectors (
     created_at TIMESTAMP DEFAULT NOW()
 );
 
--- 2. 任务状态表
+-- 2. Task status table
 CREATE TABLE tasks (
     task_id UUID PRIMARY KEY,
     session_id UUID NOT NULL,
@@ -191,18 +191,18 @@ CREATE TABLE tasks (
     completed_at TIMESTAMP
 );
 
--- 3. 会话/对话历史表
+-- 3. Session/dialogue history table
 CREATE TABLE sessions (
     session_id UUID PRIMARY KEY,
     user_input TEXT NOT NULL,
     final_output TEXT,
-    summary TEXT,  -- 对话摘要
+    summary TEXT,  -- Dialogue summary
     status VARCHAR(20) DEFAULT 'running',
     created_at TIMESTAMP DEFAULT NOW(),
     completed_at TIMESTAMP
 );
 
--- 4. Agent 上下文表
+-- 4. Agent context table
 CREATE TABLE agent_contexts (
     id SERIAL PRIMARY KEY,
     session_id UUID NOT NULL,
@@ -211,7 +211,7 @@ CREATE TABLE agent_contexts (
     updated_at TIMESTAMP DEFAULT NOW()
 );
 
--- 创建索引
+-- Create indexes
 CREATE INDEX idx_vectors_session ON semantic_vectors(session_id);
 CREATE INDEX idx_vectors_embedding ON semantic_vectors USING hnsw (embedding vector_cosine_ops);
 CREATE INDEX idx_tasks_session ON tasks(session_id);
@@ -219,34 +219,34 @@ CREATE INDEX idx_tasks_status ON tasks(status);
 CREATE INDEX idx_contexts_session_agent ON agent_contexts(session_id, agent_id);
 ```
 
-## 3. 数据流设计
+## 3. Data Flow Design
 
-### 3.1 完整工作流时序图
+### 3.1 Complete Workflow Sequence Diagram
 
 ```
 User
   │
   ▼
 LeaderAgent.analyze()
-  │ 提取用户意图
+  │ Extract user intent
   ▼
 LeaderAgent.decompose()
-  │ 拆分为 Task List
+  │ Decompose into Task List
   ▼
 For each task in tasks:
   │
   ├── TaskRegistry.register(task)
-  │   └── 写入 pending 状态
+  │   └── Write pending status
   │
   ├── AHPProtocol.send_task(sub_agent, task, token_limit)
   │   │
   │   ▼
   │   SubAgent.execute()
-  │   │ 1. 抢单 claim_task()
-  │   │ 2. 更新为 in_progress
-  │   │ 3. 执行工具/数据源
-  │   │ 4. 定期 report_progress()
-  │   │ 5. 完成写入 result
+  │   │ 1. Claim task()
+  │   │ 2. Update to in_progress
+  │   │ 3. Execute tools/data sources
+  │   │ 4. Periodically report_progress()
+  │   │ 5. Complete write result
   │   │
   │   ▼
   │   AHPProtocol.receive_result()
@@ -255,58 +255,58 @@ For each task in tasks:
   │
   ▼
 ResultValidator.validate()
-  │ 校验所有结果
+  │ Validate all results
   ▼
 LeaderAgent.aggregate()
-  │ 汇总输出
+  │ Aggregate output
   ▼
 StorageLayer.store()
-  │ 1. 语义向量存入 pgvector
-  │ 2. 任务状态更新
-  │ 3. 对话摘要写入
+  │ 1. Store semantic vectors to pgvector
+  │ 2. Update task status
+  │ 3. Write dialogue summary
   │
   ▼
 Final Output
 ```
 
-### 3.2 Token 控制流程
+### 3.2 Token Control Flow
 
 ```
-Leader 生成指令:
+Leader generates instruction:
 ┌────────────────────────────────────┐
-│  原始任务: "分析XX公司财务数据"    │
+│  Original task: "Analyze XX company"│
 ├────────────────────────────────────┤
-│  精简指令 (Token Limit 500):       │
-│  "任务: 财务分析 | 目标: XX公司    │
-│   指标: 营收/利润/负债 | 格式: JSON│
-│   上文: {context_hash}"            │
+│  Compact instruction (Token Limit 500): │
+│  "Task: Financial analysis | Target: XX │
+│   Metrics: Revenue/Profit/Debt | Format: JSON│
+│   Context: {context_hash}"            │
 └────────────────────────────────────┘
               │
               ▼
-Sub Agent 接收后:
-1. 从 Private Context 恢复完整上下文
-2. 结合精简指令执行任务
-3. 仅返回结构化结果 (非完整对话)
+After Sub Agent receives:
+1. Restore complete context from Private Context
+2. Execute task with compact instruction
+3. Return only structured results (not full dialogue)
 ```
 
-## 4. 错误处理与容错
+## 4. Error Handling and Fault Tolerance
 
-### 4.1 任务失败处理
+### 4.1 Task Failure Handling
 
-| 失败场景 | 处理策略 |
+| Failure Scenario | Handling Strategy |
 |---------|---------|
-| Sub Agent 无响应 | 超时后重新派发 (最多3次) |
-| 工具执行失败 | 记录错误，尝试备选工具 |
-| 结果校验失败 | 标记为 failed，返回 Leader 重试 |
-| 数据库连接失败 | 降级到内存缓存，重试写入 |
+| Sub Agent not responding | Re-dispatch after timeout (max 3 times) |
+| Tool execution failed | Log error, try alternative tool |
+| Result validation failed | Mark as failed, return to Leader for retry |
+| Database connection failed | Degrade to memory cache, retry write |
 
-### 4.2 任务状态机
+### 4.2 Task State Machine
 
 ```
    ┌─────────┐
-   │ pending │  (创建)
+   │ pending │  (created)
    └────┬────┘
-        │ claim (抢单)
+        │ claim
         ▼
    ┌─────────┐
    │in_progress│
@@ -318,15 +318,15 @@ Sub Agent 接收后:
    └─────────┘
 ```
 
-## 5. 配置与扩展
+## 5. Configuration and Extension
 
-### 5.1 Agent 配置示例
+### 5.1 Agent Configuration Example
 
 ```python
 # sub_agent_config.yaml
 agents:
   - id: "researcher"
-    name: "研究Agent"
+    name: "Research Agent"
     tools:
       - search_web
       - read_file
@@ -338,7 +338,7 @@ agents:
     timeout: 300
     
   - id: "coder"
-    name: "编码Agent"
+    name: "Coding Agent"
     tools:
       - read_codebase
       - write_code
@@ -349,9 +349,9 @@ agents:
     timeout: 600
 ```
 
-### 5.2 扩展新 Agent 类型
+### 5.2 Extending New Agent Types
 
-1. 在配置中添加 Agent 定义
-2. 实现 `SubAgent` 子类
-3. 注册到 Agent Factory
-4. 定义私有工具集和数据源
+1. Add Agent definition in configuration
+2. Implement `SubAgent` subclass
+3. Register with Agent Factory
+4. Define private toolset and data sources
