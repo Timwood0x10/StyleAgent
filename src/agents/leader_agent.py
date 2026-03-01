@@ -291,56 +291,52 @@ Only return JSON, no other content.
         pending_tasks = {t.assignee_agent_id: t for t in tasks}
 
         while len(received) < len(tasks) and (time.time() - start) < timeout:
-            # Leader monitors all results
-            for agent_id in [
-                t.assignee_agent_id
-                for t in tasks
-                if t.assignee_agent_id not in received
-            ]:
-                msg = self.mq.receive("leader", timeout=2)
+            # Receive any message, not specific to any agent
+            msg = self.mq.receive("leader", timeout=2)
 
-                if msg is None:
+            if msg is None:
+                continue
+
+            # Use actual sender from message, not iteration variable
+            sender_id = msg.agent_id
+
+            # Handle ACK messages
+            if msg.method == AHPMethod.ACK:
+                original_msg_id = msg.payload.get("original_message_id", "")
+                ack_status = msg.payload.get("ack_status", "")
+                logger.debug(f"Received ACK from {sender_id}: {ack_status}")
+                continue
+
+            # Handle RESULT messages
+            if msg.method == AHPMethod.RESULT:
+                result_data = msg.payload.get("result", {})
+                status = msg.payload.get("status", "success")
+
+                if status == "failed":
+                    error_msg = result_data.get("error", "Unknown error")
+                    logger.error(f"Task failed from {sender_id}: {error_msg}")
+                    # Move to DLQ for investigation
+                    self.mq.to_dlq(sender_id, msg, error_msg)
+                    received.add(sender_id)
                     continue
 
-                # Handle ACK messages
-                if msg.method == AHPMethod.ACK:
-                    original_msg_id = msg.payload.get("original_message_id", "")
-                    ack_status = msg.payload.get("ack_status", "")
-                    logger.debug(f"Received ACK from {agent_id}: {ack_status}")
-                    continue
+                category = result_data.get("category", "unknown")
+                results[category] = OutfitRecommendation(
+                    category=category,
+                    items=result_data.get("items", []),
+                    colors=result_data.get("colors", []),
+                    styles=result_data.get("styles", []),
+                    reasons=result_data.get("reasons", []),
+                    price_range=result_data.get("price_range", ""),
+                )
+                received.add(sender_id)
+                logger.info(f"Received result from {category}")
 
-                # Handle RESULT messages
-                if msg.method == AHPMethod.RESULT:
-                    result_data = msg.payload.get("result", {})
-                    status = msg.payload.get("status", "success")
-
-                    if status == "failed":
-                        error_msg = result_data.get("error", "Unknown error")
-                        logger.error(f"Task failed from {agent_id}: {error_msg}")
-                        # Move to DLQ for investigation
-                        self.mq.to_dlq(agent_id, msg, error_msg)
-                        received.add(agent_id)
-                        continue
-
-                    category = result_data.get("category", "unknown")
-                    results[category] = OutfitRecommendation(
-                        category=category,
-                        items=result_data.get("items", []),
-                        colors=result_data.get("colors", []),
-                        styles=result_data.get("styles", []),
-                        reasons=result_data.get("reasons", []),
-                        price_range=result_data.get("price_range", ""),
-                    )
-                    received.add(agent_id)
-                    logger.info(f"Received result from {category}")
-
-                # Handle PROGRESS messages
-                elif msg.method == AHPMethod.PROGRESS:
-                    progress = msg.payload.get("progress", 0)
-                    progress_msg = msg.payload.get("message", "")
-                    logger.debug(
-                        f"Progress from {agent_id}: {progress} - {progress_msg}"
-                    )
+            # Handle PROGRESS messages
+            elif msg.method == AHPMethod.PROGRESS:
+                progress = msg.payload.get("progress", 0)
+                progress_msg = msg.payload.get("message", "")
+                logger.debug(f"Progress from {sender_id}: {progress} - {progress_msg}")
 
         # Check for missing results and log warnings
         missing = set(pending_tasks.keys()) - received
@@ -547,7 +543,11 @@ Please return JSON in the following format:
         task_configs = [
             {"category": "head", "agent_id": "agent_head", "desc": "head accessories"},
             {"category": "top", "agent_id": "agent_top", "desc": "top clothing"},
-            {"category": "bottom", "agent_id": "agent_bottom", "desc": "bottom clothing"},
+            {
+                "category": "bottom",
+                "agent_id": "agent_bottom",
+                "desc": "bottom clothing",
+            },
             {"category": "shoes", "agent_id": "agent_shoes", "desc": "shoes"},
         ]
 
@@ -561,7 +561,9 @@ Please return JSON in the following format:
         self.tasks = tasks
         return tasks
 
-    async def _dispatch_tasks_via_ahp(self, tasks: List[OutfitTask], profile: UserProfile):
+    async def _dispatch_tasks_via_ahp(
+        self, tasks: List[OutfitTask], profile: UserProfile
+    ):
         """Dispatch tasks via AHP protocol (async)"""
         category_desc = {
             "head": "head accessories",
@@ -606,27 +608,41 @@ Please return JSON in the following format:
         results = {}
         start = time.time()
         received = set()
+        pending_tasks = {t.assignee_agent_id: t for t in tasks}
 
         while len(received) < len(tasks) and (time.time() - start) < timeout:
-            for agent_id in [
-                t.assignee_agent_id
-                for t in tasks
-                if t.assignee_agent_id not in received
-            ]:
-                msg = await self.mq.receive("leader", timeout=2)
-                if msg and msg.method == AHPMethod.RESULT:
-                    result_data = msg.payload.get("result", {})
-                    category = result_data.get("category", "unknown")
-                    results[category] = OutfitRecommendation(
-                        category=category,
-                        items=result_data.get("items", []),
-                        colors=result_data.get("colors", []),
-                        styles=result_data.get("styles", []),
-                        reasons=result_data.get("reasons", []),
-                        price_range=result_data.get("price_range", ""),
-                    )
-                    received.add(agent_id)
-                    logger.info(f"Received result from {category}")
+            # Receive any message, not specific to any agent
+            msg = await self.mq.receive("leader", timeout=2)
+
+            if msg is None:
+                continue
+
+            # Use actual sender from message
+            sender_id = msg.agent_id
+
+            if msg.method == AHPMethod.RESULT:
+                result_data = msg.payload.get("result", {})
+                category = result_data.get("category", "unknown")
+                results[category] = OutfitRecommendation(
+                    category=category,
+                    items=result_data.get("items", []),
+                    colors=result_data.get("colors", []),
+                    styles=result_data.get("styles", []),
+                    reasons=result_data.get("reasons", []),
+                    price_range=result_data.get("price_range", ""),
+                )
+                received.add(sender_id)
+                logger.info(f"Received result from {category}")
+            elif msg.method == AHPMethod.ACK:
+                logger.debug(f"Received ACK from {sender_id}")
+            elif msg.method == AHPMethod.PROGRESS:
+                progress = msg.payload.get("progress", 0)
+                logger.debug(f"Progress from {sender_id}: {progress}")
+
+        # Check for missing results
+        missing = set(pending_tasks.keys()) - received
+        if missing:
+            logger.warning(f"Missing results from agents: {missing}")
 
         return results
 

@@ -633,9 +633,13 @@ class AsyncAHPSender:
     """Async AHP Sender"""
 
     def __init__(
-        self, message_queue: AsyncMessageQueue, token_controller: "AsyncTokenController" = None
+        self,
+        message_queue: AsyncMessageQueue,
+        agent_id: str = "leader",
+        token_controller: "AsyncTokenController" = None,
     ):
         self.mq = message_queue
+        self.agent_id = agent_id
         self.token_controller = token_controller or AsyncTokenController()
 
     async def send_task(
@@ -662,7 +666,7 @@ class AsyncAHPSender:
 
         msg = AHPMessage(
             method=AHPMethod.TASK,
-            agent_id="leader",
+            agent_id=self.agent_id,
             target_agent=target_agent,
             task_id=task_id,
             session_id=session_id,
@@ -670,7 +674,9 @@ class AsyncAHPSender:
             token_limit=token_limit,
         )
         await self.mq.send(target_agent, msg)
-        logger.debug(f"ASYNC SEND [->{target_agent}] TASK: {payload.get('category', 'unknown')}")
+        logger.debug(
+            f"ASYNC SEND [->{target_agent}] TASK: {payload.get('category', 'unknown')}"
+        )
         return msg
 
     async def send_result(
@@ -684,7 +690,7 @@ class AsyncAHPSender:
         """Send result (async)"""
         msg = AHPMessage(
             method=AHPMethod.RESULT,
-            agent_id="leader",
+            agent_id=self.agent_id,
             target_agent=target_agent,
             task_id=task_id,
             session_id=session_id,
@@ -704,7 +710,7 @@ class AsyncAHPSender:
         """Send progress (async)"""
         msg = AHPMessage(
             method=AHPMethod.PROGRESS,
-            agent_id="leader",
+            agent_id=self.agent_id,
             target_agent=target_agent,
             task_id=task_id,
             session_id=session_id,
@@ -721,7 +727,9 @@ class AsyncAHPReceiver:
         self.agent_id = agent_id
         self.mq = message_queue
 
-    async def receive(self, timeout: float = 30, auto_ack: bool = True) -> Optional[AHPMessage]:
+    async def receive(
+        self, timeout: float = 30, auto_ack: bool = True
+    ) -> Optional[AHPMessage]:
         """Receive message (async)"""
         msg = await self.mq.receive(self.agent_id, timeout)
         if msg:

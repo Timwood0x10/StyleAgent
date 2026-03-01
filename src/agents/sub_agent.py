@@ -6,7 +6,13 @@ import asyncio
 import json
 import threading
 from typing import Dict, Any, Optional
-from ..core.models import UserProfile, OutfitRecommendation, OutfitTask, TaskStatus
+from ..core.models import (
+    UserProfile,
+    OutfitRecommendation,
+    OutfitTask,
+    TaskStatus,
+    Gender,
+)
 from ..utils.llm import LocalLLM
 from ..utils import get_logger
 from ..protocol import get_message_queue, AHPReceiver, AHPSender, AHPError, AHPErrorCode
@@ -92,9 +98,16 @@ class OutfitSubAgent:
 
             # 2. Execute recommendation
             user_info = payload.get("user_info", {})
+            # Convert gender string to Gender enum
+            gender_str = user_info.get("gender", "male")
+            gender = (
+                Gender.MALE
+                if str(gender_str).lower() in ("male", "男")
+                else Gender.FEMALE
+            )
             profile = UserProfile(
                 name=user_info.get("name", "User"),
-                gender=user_info.get("gender", "male"),
+                gender=gender,
                 age=user_info.get("age", 25),
                 occupation=user_info.get("occupation", ""),
                 hobbies=user_info.get("hobbies", []),
@@ -261,7 +274,7 @@ class AsyncOutfitSubAgent:
 
         self.mq = await get_async_message_queue()
         self.receiver = AsyncAHPReceiver(self.agent_id, self.mq)
-        self.sender = AsyncAHPSender(self.mq)
+        self.sender = AsyncAHPSender(self.mq, self.agent_id)
         self._running = True
         self._task = asyncio.create_task(self._run_loop())
         logger.info(f"Async {self.agent_id} started")
@@ -282,11 +295,12 @@ class AsyncOutfitSubAgent:
         while self._running:
             try:
                 msg = await asyncio.wait_for(
-                    self.receiver.wait_for_task(timeout=5),
-                    timeout=5.0
+                    self.receiver.wait_for_task(timeout=5), timeout=5.0
                 )
                 if msg:
-                    logger.info(f"[Async {self.agent_id}] received task: {msg.payload.get('category')}")
+                    logger.info(
+                        f"[Async {self.agent_id}] received task: {msg.payload.get('category')}"
+                    )
                     await self._handle_task(msg)
             except asyncio.TimeoutError:
                 continue
@@ -303,13 +317,22 @@ class AsyncOutfitSubAgent:
 
         try:
             # 1. Send progress
-            await self.sender.send_progress("leader", task_id, session_id, 0.1, "Starting")
+            await self.sender.send_progress(
+                "leader", task_id, session_id, 0.1, "Starting"
+            )
 
             # 2. Execute recommendation
             user_info = payload.get("user_info", {})
+            # Convert gender string to Gender enum
+            gender_str = user_info.get("gender", "male")
+            gender = (
+                Gender.MALE
+                if str(gender_str).lower() in ("male", "男")
+                else Gender.FEMALE
+            )
             profile = UserProfile(
                 name=user_info.get("name", "User"),
-                gender=user_info.get("gender", "male"),
+                gender=gender,
                 age=user_info.get("age", 25),
                 occupation=user_info.get("occupation", ""),
                 hobbies=user_info.get("hobbies", []),
@@ -318,10 +341,14 @@ class AsyncOutfitSubAgent:
                 occasion=user_info.get("occasion", "daily"),
             )
 
-            await self.sender.send_progress("leader", task_id, session_id, 0.5, "Recommending...")
+            await self.sender.send_progress(
+                "leader", task_id, session_id, 0.5, "Recommending..."
+            )
             result = await self._recommend(profile)
 
-            await self.sender.send_progress("leader", task_id, session_id, 0.9, "Completed")
+            await self.sender.send_progress(
+                "leader", task_id, session_id, 0.9, "Completed"
+            )
 
             # 3. Return result
             await self.sender.send_result(
@@ -346,6 +373,33 @@ class AsyncOutfitSubAgent:
                 "leader", task_id, session_id, {"error": str(e)}, status="failed"
             )
             logger.error(f"[Async {self.agent_id}] task failed: {e}")
+
+    def _parse_response(self, response: str) -> OutfitRecommendation:
+        """Parse response"""
+        try:
+            start = response.find("{")
+            end = response.rfind("}") + 1
+            if start >= 0 and end > start:
+                data = json.loads(response[start:end])
+                return OutfitRecommendation(
+                    category=data.get("category", self.category),
+                    items=data.get("items", []),
+                    colors=data.get("colors", []),
+                    styles=data.get("styles", []),
+                    reasons=data.get("reasons", []),
+                    price_range=data.get("price_range", ""),
+                )
+        except Exception as e:
+            logger.warning(
+                f"Failed to parse outfit recommendation, using fallback: {e}"
+            )
+
+        return OutfitRecommendation(
+            category=self.category,
+            items=["Pending"],
+            colors=["TBD"],
+            reasons=["Waiting"],
+        )
 
     async def _recommend(self, user_profile: UserProfile) -> OutfitRecommendation:
         """Execute recommendation (async)"""

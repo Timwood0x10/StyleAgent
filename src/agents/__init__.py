@@ -3,7 +3,12 @@ Agents Module - Leader + Sub Agents (AHP Protocol)
 """
 
 from .leader_agent import LeaderAgent, AsyncLeaderAgent
-from .sub_agent import OutfitSubAgent, OutfitAgentFactory, AsyncOutfitSubAgent, AsyncOutfitAgentFactory
+from .sub_agent import (
+    OutfitSubAgent,
+    OutfitAgentFactory,
+    AsyncOutfitSubAgent,
+    AsyncOutfitAgentFactory,
+)
 from .resources import AgentResources, AgentResourceFactory, PrivateContext
 from ..core.models import UserProfile, Gender, OutfitRecommendation, OutfitResult
 from ..utils.llm import create_llm, LocalLLM

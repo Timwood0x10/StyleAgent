@@ -30,11 +30,11 @@ class LocalLLM:
     def _check_connection(self) -> bool:
         """Check if model service is available"""
         try:
-            resp = requests.get(f"{self.base_url}/models", timeout=5)
+            resp = requests.get(f"{self.base_url}/api/tags", timeout=5)
             if resp.status_code == 200:
                 models = resp.json()
-                for m in models.get("data", []):
-                    if self.model_name in m.get("id", ""):
+                for m in models.get("models", []):
+                    if self.model_name in m.get("name", ""):
                         return True
             return False
         except:
@@ -52,56 +52,37 @@ class LocalLLM:
 
         try:
             resp = requests.post(
-                f"{self.base_url}/chat/completions",
+                f"{self.base_url}/api/chat",
                 json={
                     "model": self.model_name,
                     "messages": messages,
                     "temperature": self.temperature,
                     "max_tokens": self.max_tokens,
+                    "stream": False,
                 },
                 timeout=60,
             )
             data = resp.json()
-            return data["choices"][0]["message"]["content"]
+            return data["message"]["content"]
         except Exception as e:
             return f"Invocation failed: {e}"
 
     async def ainvoke(self, prompt: str, system_prompt: str = "") -> str:
-        """Invoke model (async)"""
-        if not self.available:
-            return "Local model not connected"
+        """Invoke model (async) - using thread pool to avoid httpx issues"""
+        import asyncio
 
-        messages = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": prompt})
-
-        try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(
-                    f"{self.base_url}/chat/completions",
-                    json={
-                        "model": self.model_name,
-                        "messages": messages,
-                        "temperature": self.temperature,
-                        "max_tokens": self.max_tokens,
-                    },
-                    timeout=60.0,
-                )
-                data = resp.json()
-                return data["choices"][0]["message"]["content"]
-        except Exception as e:
-            return f"Async invocation failed: {e}"
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self.invoke, prompt, system_prompt)
 
     async def acheck_connection(self) -> bool:
         """Check if model service is available (async)"""
         try:
             async with httpx.AsyncClient() as client:
-                resp = await client.get(f"{self.base_url}/models", timeout=5.0)
+                resp = await client.get(f"{self.base_url}/api/tags", timeout=5.0)
                 if resp.status_code == 200:
                     models = resp.json()
-                    for m in models.get("data", []):
-                        if self.model_name in m.get("id", ""):
+                    for m in models.get("models", []):
+                        if self.model_name in m.get("name", ""):
                             return True
                 return False
         except:
