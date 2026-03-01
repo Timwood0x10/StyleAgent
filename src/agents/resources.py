@@ -16,6 +16,9 @@ from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
 from ..utils.llm import LocalLLM
+from ..utils import get_logger
+
+logger = get_logger(__name__)
 
 
 # ========== Tools ==========
@@ -324,7 +327,7 @@ class PrivateContext:
                     session_id, self.agent_id, self._memory
                 )
             except Exception as e:
-                print(f"WARNING: Context save failed: {e}")
+                logger.warning(f"Context save failed: {e}")
 
     def load_from_storage(self, session_id: str):
         """Load from storage"""
@@ -335,7 +338,7 @@ class PrivateContext:
                     with self._lock:
                         self._memory.update(ctx["context_data"])
             except Exception as e:
-                print(f"WARNING: Context load failed: {e}")
+                logger.warning(f"Context load failed: {e}")
 
 
 # ========== Agent Resources ==========

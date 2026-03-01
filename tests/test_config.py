@@ -41,3 +41,19 @@ class TestConfig:
         """Test default log level"""
         config = Config()
         assert config.LOG_LEVEL is not None
+
+    def test_sub_agent_categories(self):
+        """Test SUB_AGENT_CATEGORIES configuration"""
+        config = Config()
+        categories = config.SUB_AGENT_CATEGORIES
+        assert categories is not None
+        assert isinstance(categories, list)
+        assert len(categories) > 0
+
+    def test_sub_agent_prefix(self):
+        """Test SUB_AGENT_PREFIX configuration"""
+        config = Config()
+        prefix = config.SUB_AGENT_PREFIX
+        assert prefix is not None
+        assert isinstance(prefix, str)
+        assert len(prefix) > 0

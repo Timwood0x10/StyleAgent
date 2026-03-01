@@ -4,6 +4,8 @@ Leader Agent - User Profile Parsing and Task Distribution (using AHP Protocol)
 
 import asyncio
 import json
+import queue
+import threading
 import time
 import uuid
 from typing import Any, Callable, Dict, List
@@ -19,6 +21,7 @@ from ..core.registry import TaskRegistry, get_task_registry, TaskStatus
 from ..core.errors import RetryHandler, RetryConfig, ErrorType, CircuitBreaker
 from ..utils.llm import LocalLLM
 from ..utils import get_logger
+from ..utils.config import config
 from ..protocol import get_message_queue, AHPSender, AHPError, AHPErrorCode, AHPMethod
 from ..storage.postgres import StorageLayer
 
@@ -430,50 +433,41 @@ Only return JSON, no other content.
         # Try intelligent task decomposition with LLM
         categories = self._analyze_required_categories(user_profile)
 
-        # If LLM fails, use default categories
+        # If LLM fails, use default categories from config
         if not categories:
-            categories = ["head", "top", "bottom", "shoes"]
+            categories = config.SUB_AGENT_CATEGORIES
             logger.info("Using default categories due to LLM failure")
 
         # Build task configs based on determined categories
-        task_configs = []
-        category_agent_map = {
-            "head": "agent_head",
-            "top": "agent_top",
-            "bottom": "agent_bottom",
-            "shoes": "agent_shoes",
-        }
-        category_desc_map = {
-            "head": "head accessories recommendation",
-            "top": "top clothing recommendation",
-            "bottom": "bottom clothing recommendation",
-            "shoes": "shoes recommendation",
-        }
+        prefix = config.SUB_AGENT_PREFIX
+        agent_map = {cat: f"{prefix}{cat}" for cat in config.SUB_AGENT_CATEGORIES}
 
+        # Build task configs
+        task_configs: List[Dict[str, str]] = []
         for cat in categories:
             task_configs.append(
                 {
                     "category": cat,
-                    "agent_id": category_agent_map.get(cat, f"agent_{cat}"),
-                    "desc": category_desc_map.get(cat, f"{cat} recommendation"),
+                    "agent_id": agent_map.get(cat, f"{prefix}{cat}"),
+                    "desc": f"{cat} recommendation",
                 }
             )
 
         tasks = []
-        for config in task_configs:
-            task = OutfitTask(category=config["category"], user_profile=user_profile)
-            task.assignee_agent_id = config["agent_id"]
+        for tc in task_configs:
+            task = OutfitTask(category=tc["category"], user_profile=user_profile)
+            task.assignee_agent_id = tc["agent_id"]
 
             # Register task to TaskRegistry
             self.registry.register_task(
                 session_id=self.session_id,
-                title=f"{config['category']} recommendation",
-                description=config["desc"],
-                category=config["category"],
+                title=f"{tc['category']} recommendation",
+                description=tc["desc"],
+                category=tc["category"],
             )
 
             tasks.append(task)
-            logger.debug(f"Created task: {config['category']} -> {config['agent_id']}")
+            logger.debug(f"Created task: {tc['category']} -> {tc['agent_id']}")
 
         self.tasks = tasks
         return tasks
@@ -537,13 +531,50 @@ Only return JSON, no other content.
         self, tasks: List[OutfitTask], timeout: int = 60
     ) -> Dict[str, OutfitRecommendation]:
         """Collect results from all agents with ACK handling"""
-        results = {}
+        results: Dict[str, OutfitRecommendation] = {}
         start = time.time()
         received: set[str] = set()
         pending_tasks = {t.assignee_agent_id: t for t in tasks}
         agent_progress: Dict[str, float] = {}  # Track progress per agent
+        progress_queue: queue.Queue = queue.Queue()  # Queue for progress messages
+
+        # Start a background thread to handle PROGRESS messages
+        def progress_handler():
+            while time.time() - start < timeout:
+                try:
+                    msg = self.mq.receive("leader", timeout=1)
+                    if msg is None:
+                        continue
+                    if msg.method == AHPMethod.PROGRESS:
+                        progress_queue.put(msg)
+                    else:
+                        # Put non-PROGRESS messages back to main handling
+                        # For now, just log other message types
+                        logger.debug(f"Ignoring non-PROGRESS in handler: {msg.method}")
+                except queue.Empty:
+                    continue
+                except Exception as e:
+                    logger.warning(f"Progress handler error: {e}")
+                    break
+
+        progress_thread = threading.Thread(target=progress_handler, daemon=True)
+        progress_thread.start()
 
         while len(received) < len(tasks) and (time.time() - start) < timeout:
+            # Process any queued PROGRESS messages
+            while not progress_queue.empty():
+                try:
+                    msg = progress_queue.get_nowait()
+                    sender_id = msg.agent_id
+                    progress = msg.payload.get("progress", 0)
+                    progress_msg = msg.payload.get("message", "")
+                    agent_progress[sender_id] = progress
+                    logger.info(
+                        f"Progress from {sender_id}: {progress*100:.0f}% - {progress_msg}"
+                    )
+                except queue.Empty:
+                    break
+
             # Receive any message, not specific to any agent
             msg = self.mq.receive("leader", timeout=2)
 
@@ -559,8 +590,9 @@ Only return JSON, no other content.
                 logger.debug(f"Received ACK from {sender_id}: {ack_status}")
                 continue
 
-            # Handle RESULT messages
-            if msg.method == AHPMethod.RESULT:
+            # Skip PROGRESS messages - they are handled by background thread
+            if msg.method == AHPMethod.PROGRESS:
+                continue
                 result_data = msg.payload.get("result", {})
                 status = msg.payload.get("status", "success")
 
@@ -592,14 +624,23 @@ Only return JSON, no other content.
 
                 logger.info(f"Received result from {category} (agent: {sender_id})")
 
-            # Handle PROGRESS messages - track progress but don't count as received
+            # Handle PROGRESS messages - skip them, do NOT consume from queue
+            # This prevents progress messages from blocking result collection
+            # Sub Agent should send progress to a separate queue or we should use peek
             elif msg.method == AHPMethod.PROGRESS:
+                # Skip PROGRESS messages - don't consume them
+                # They should be handled by a separate progress listener
+                # For now, just log and continue without consuming
                 progress = msg.payload.get("progress", 0)
                 progress_msg = msg.payload.get("message", "")
                 agent_progress[sender_id] = progress
                 logger.info(
                     f"Progress from {sender_id}: {progress*100:.0f}% - {progress_msg}"
                 )
+                # Don't break or return - continue the loop to get next message
+                # But we need to avoid infinite loop on PROGRESS messages
+                # Since we can't "un-receive", we'll just continue
+                continue
 
         # Check for missing results and log warnings
         missing = set(pending_tasks.keys()) - received
@@ -1042,39 +1083,28 @@ Return ONLY JSON array like ["head", "top"], no other text.
         # Try intelligent task decomposition with LLM
         categories = await self._analyze_required_categories(user_profile)
 
-        # If LLM fails, use default categories
+        # If LLM fails, use default categories from config
         if not categories:
-            categories = ["head", "top", "bottom", "shoes"]
+            categories = config.SUB_AGENT_CATEGORIES
             logger.info("Using default categories due to LLM failure")
 
-        category_agent_map = {
-            "head": "agent_head",
-            "top": "agent_top",
-            "bottom": "agent_bottom",
-            "shoes": "agent_shoes",
-        }
-        category_desc_map = {
-            "head": "head accessories recommendation",
-            "top": "top clothing recommendation",
-            "bottom": "bottom clothing recommendation",
-            "shoes": "shoes recommendation",
-        }
+        prefix = config.SUB_AGENT_PREFIX
 
         task_configs = [
             {
                 "category": cat,
-                "agent_id": category_agent_map.get(cat, f"agent_{cat}"),
-                "desc": category_desc_map.get(cat, f"{cat} recommendation"),
+                "agent_id": f"{prefix}{cat}",
+                "desc": f"{cat} recommendation",
             }
             for cat in categories
         ]
 
         tasks = []
-        for config in task_configs:
-            task = OutfitTask(category=config["category"], user_profile=user_profile)
-            task.assignee_agent_id = config["agent_id"]
+        for tc in task_configs:
+            task = OutfitTask(category=tc["category"], user_profile=user_profile)
+            task.assignee_agent_id = tc["agent_id"]
             tasks.append(task)
-            logger.debug(f"Created task: {config['category']} -> {config['agent_id']}")
+            logger.debug(f"Created task: {tc['category']} -> {tc['agent_id']}")
 
         self.tasks = tasks
         return tasks
