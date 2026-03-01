@@ -1,6 +1,6 @@
 """
 Async Outfit Recommendation System Demo (No DB version)
-Demonstrates the async agent architecture with mock LLM
+Demonstrates the async agent architecture with real LLM
 """
 
 import asyncio
@@ -10,67 +10,9 @@ import json
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from src.agents import AsyncLeaderAgent, AsyncOutfitAgentFactory, create_llm
+from src.agents import AsyncLeaderAgent, AsyncOutfitAgentFactory
 from src.protocol import reset_async_message_queue
-
-
-# Custom mock response for testing
-class MockAsyncLLM:
-    """Mock async LLM for testing"""
-
-    def __init__(self):
-        self.available = True
-        self.call_count = 0
-
-    async def ainvoke(self, prompt: str, system_prompt: str = "") -> str:
-        """Mock async invoke"""
-        self.call_count += 1
-        await asyncio.sleep(0.2)  # Simulate LLM delay
-
-        if "user profile" in prompt.lower():
-            return json.dumps({
-                "name": "Xiao Hong",
-                "gender": "female",
-                "age": 28,
-                "occupation": "designer",
-                "hobbies": ["reading"],
-                "mood": "happy",
-                "season": "spring",
-                "occasion": "daily",
-                "budget": "medium"
-            })
-        elif "overall style" in prompt.lower():
-            return json.dumps({
-                "overall_style": "Elegant casual with a touch of creativity",
-                "summary": "A happy, professional look that balances creativity and sophistication"
-            })
-        else:
-            # Category recommendation
-            category = "item"
-            if "head" in prompt.lower():
-                category = "head"
-            elif "top" in prompt.lower():
-                category = "top"
-            elif "bottom" in prompt.lower():
-                category = "bottom"
-            elif "shoes" in prompt.lower():
-                category = "shoes"
-
-            return json.dumps({
-                "category": category,
-                "items": [f"{category.title()} Item {self.call_count}"],
-                "colors": ["blue", "white"],
-                "styles": ["casual", "elegant"],
-                "reasons": ["Matches user's happy mood and profession"],
-                "price_range": "medium"
-            })
-
-    def invoke(self, prompt: str, system_prompt: str = "") -> str:
-        """Sync invoke (fallback)"""
-        return json.dumps({
-            "overall_style": "Test",
-            "summary": "Test"
-        })
+from src.utils.llm import LocalLLM
 
 
 async def main():
@@ -82,10 +24,13 @@ async def main():
     # Reset async message queue
     await reset_async_message_queue()
 
-    # 1. Create mock async LLM
-    print("\n[1] Creating mock async LLM...")
-    llm = MockAsyncLLM()
-    print(f"   MockAsyncLLM (available: {llm.available})")
+    # 1. Create real async LLM
+    print("\n[1] Creating async LLM...")
+    llm = LocalLLM()
+    print(f"   LocalLLM (available: {llm.available})")
+
+    if not llm.available:
+        print("   WARNING: LLM not available, demo may fail!")
 
     # 2. Create async Leader Agent
     print("\n[2] Creating async Leader Agent...")
@@ -100,10 +45,13 @@ async def main():
     # 4. Create and start async Sub Agents
     print("\n[3] Starting async Sub Agents...")
     import time
+
     start = time.time()
     agents = await AsyncOutfitAgentFactory.create_agents(llm)
     elapsed = time.time() - start
-    print(f"   Started {len(agents)} agents in {elapsed:.2f}s: {', '.join(agents.keys())}")
+    print(
+        f"   Started {len(agents)} agents in {elapsed:.2f}s: {', '.join(agents.keys())}"
+    )
 
     # 5. Process request
     print("\n[4] Processing request (async)...")
@@ -123,7 +71,6 @@ async def main():
     print("\n" + "=" * 60)
     print("ASYNC DEMO DONE!")
     print("=" * 60)
-    print(f"\nTotal LLM calls: {llm.call_count}")
 
 
 if __name__ == "__main__":
