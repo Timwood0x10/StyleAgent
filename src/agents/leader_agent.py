@@ -6,7 +6,7 @@ import asyncio
 import json
 import time
 import uuid
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List
 from ..core.models import (
     UserProfile,
     Gender,
@@ -17,6 +17,7 @@ from ..core.models import (
 )
 from ..core.validator import ResultValidator, ValidationLevel
 from ..core.registry import TaskRegistry, get_task_registry
+from ..core.errors import RetryHandler, RetryConfig, ErrorType
 from ..utils.llm import LocalLLM
 from ..utils import get_logger
 from ..protocol import get_message_queue, AHPSender, AHPError, AHPErrorCode, AHPMethod
@@ -50,6 +51,46 @@ class LeaderAgent:
         self.validator = ResultValidator(level=ValidationLevel.NORMAL)
         self.registry = get_task_registry()
         self._db = StorageLayer()  # For RAG vector storage
+
+        # Initialize retry handler
+        retry_config = RetryConfig(
+            max_retries=3,
+            initial_delay=1.0,
+            max_delay=30.0,
+            backoff_factor=2.0,
+            retry_on=[
+                ErrorType.LLM_FAILED,
+                ErrorType.NETWORK,
+                ErrorType.TIMEOUT,
+            ],
+        )
+        self.retry_handler = RetryHandler(retry_config)
+
+    def _execute_with_timeout(self, func: Callable, timeout: int = 30, *args, **kwargs) -> Any:
+        """Execute function with timeout (cross-platform)"""
+        import threading
+
+        result = []
+        exception = []
+
+        def target():
+            try:
+                result.append(func(*args, **kwargs))
+            except Exception as e:
+                exception.append(e)
+
+        thread = threading.Thread(target=target)
+        thread.daemon = True
+        thread.start()
+        thread.join(timeout)
+
+        if thread.is_alive():
+            raise TimeoutError(f"Function execution timed out after {timeout}s")
+
+        if exception:
+            raise exception[0]
+
+        return result[0] if result else None
 
     def process(self, user_input: str) -> OutfitResult:
         """Process user input - full workflow"""
@@ -102,7 +143,12 @@ Please return JSON in the following format:
 Only return JSON, no other content.
 """
 
-        response = self.llm.invoke(prompt, SYSTEM_PROMPT)
+        response = self.retry_handler.execute_with_retry(
+            self.llm.invoke,
+            task_id="parse_profile",
+            prompt=prompt,
+            system_prompt=SYSTEM_PROMPT,
+        )
 
         try:
             start = response.find("{")
@@ -468,7 +514,12 @@ Return JSON format:
 }}
 """
 
-        response = self.llm.invoke(style_prompt, SYSTEM_PROMPT)
+        response = self.retry_handler.execute_with_retry(
+            self.llm.invoke,
+            task_id="aggregate_results",
+            prompt=style_prompt,
+            system_prompt=SYSTEM_PROMPT,
+        )
 
         try:
             start = response.find("{")
@@ -517,6 +568,20 @@ class AsyncLeaderAgent:
         self.sender = None
         self.session_id = ""
         self._db = StorageLayer()  # For RAG vector storage
+
+        # Initialize retry handler
+        retry_config = RetryConfig(
+            max_retries=3,
+            initial_delay=1.0,
+            max_delay=30.0,
+            backoff_factor=2.0,
+            retry_on=[
+                ErrorType.LLM_FAILED,
+                ErrorType.NETWORK,
+                ErrorType.TIMEOUT,
+            ],
+        )
+        self.retry_handler = RetryHandler(retry_config)
 
     async def _init_mq(self):
         """Initialize async message queue"""

@@ -17,6 +17,7 @@ from ..utils.llm import LocalLLM
 from ..utils import get_logger
 from ..protocol import get_message_queue, AHPReceiver, AHPSender, AHPError, AHPErrorCode
 from ..storage.postgres import StorageLayer
+from ..core.errors import RetryHandler, RetryConfig, ErrorType
 
 # Logger for this module
 logger = get_logger(__name__)
@@ -68,6 +69,20 @@ class OutfitSubAgent:
 
         # Initialize database for RAG
         self._db: Optional[StorageLayer] = None
+
+        # Initialize retry handler
+        retry_config = RetryConfig(
+            max_retries=3,
+            initial_delay=1.0,
+            max_delay=30.0,
+            backoff_factor=2.0,
+            retry_on=[
+                ErrorType.LLM_FAILED,
+                ErrorType.NETWORK,
+                ErrorType.TIMEOUT,
+            ],
+        )
+        self.retry_handler = RetryHandler(retry_config)
 
     def _get_db(self) -> StorageLayer:
         """Lazy init database connection"""
@@ -261,7 +276,12 @@ class OutfitSubAgent:
         prompt = self._build_prompt(
             user_profile, fashion_info, weather_info, style_info, compact_instruction, rag_context
         )
-        response = self.llm.invoke(prompt, self.system_prompt)
+        response = self.retry_handler.execute_with_retry(
+            self.llm.invoke,
+            task_id=f"recommend_{self.category}",
+            prompt=prompt,
+            system_prompt=self.system_prompt,
+        )
 
         return self._parse_response(response)
 
