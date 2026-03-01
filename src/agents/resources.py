@@ -9,10 +9,13 @@ Provides each Sub Agent with independent:
 """
 
 import json
+import asyncio
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
+
+from ..utils.llm import LocalLLM
 
 
 # ========== Tools ==========
@@ -24,6 +27,11 @@ class BaseTool:
     def __init__(self, name: str, description: str = ""):
         self.name = name
         self.description = description
+        self.llm: Optional[LocalLLM] = None
+
+    def set_llm(self, llm: LocalLLM):
+        """Set LLM instance for this tool"""
+        self.llm = llm
 
     def execute(self, **kwargs) -> Any:
         raise NotImplementedError
@@ -33,12 +41,46 @@ class BaseTool:
 
 
 class FashionSearchTool(BaseTool):
-    """Fashion search tool"""
+    """Fashion search tool using LLM"""
 
-    def __init__(self):
+    def __init__(self, llm: LocalLLM = None):
         super().__init__("fashion_search", "Search fashion information")
-        # Sample data source
-        self._database = {
+        self.llm = llm
+
+    def execute(self, query: str = "", **kwargs) -> Dict[str, Any]:
+        """Execute search using LLM or fallback to database"""
+        if self.llm and self.llm.available:
+            prompt = f"""Based on the following user context, provide fashion recommendations:
+
+User Query: {query}
+User Mood: {kwargs.get('mood', 'normal')}
+User Occupation: {kwargs.get('occupation', 'general')}
+Season: {kwargs.get('season', 'spring')}
+User Age: {kwargs.get('age', 25)}
+
+Please provide recommendations in JSON format:
+{{
+    "colors": ["color1", "color2"],
+    "style_tips": ["tip1", "tip2"],
+    "season_colors": ["color1", "color2"]
+}}"""
+            response = self.llm.invoke(prompt)
+            try:
+                import json
+                start = response.find("{")
+                end = response.rfind("}") + 1
+                if start >= 0 and end > start:
+                    data = json.loads(response[start:end])
+                    return data
+            except:
+                pass
+
+        # Fallback to database
+        return self._execute_fallback(**kwargs)
+
+    def _execute_fallback(self, **kwargs) -> Dict[str, Any]:
+        """Fallback to database when LLM unavailable"""
+        database = {
             "colors_for_mood": {
                 "happy": ["yellow", "orange", "pink", "bright blue"],
                 "sad": ["blue", "gray", "dark green", "black"],
@@ -60,64 +102,118 @@ class FashionSearchTool(BaseTool):
             },
         }
 
-    def execute(self, query: str = "", **kwargs) -> Dict[str, Any]:
-        """Execute search"""
         results = {}
-
-        # Mood colors
         if "mood" in kwargs:
-            mood = kwargs["mood"]
-            results["colors"] = self._database["colors_for_mood"].get(mood, [])
-
-        # Occupation recommendations
+            results["colors"] = database["colors_for_mood"].get(kwargs["mood"], [])
         if "occupation" in kwargs:
-            occ = kwargs["occupation"]
-            results["style_tips"] = self._database["styles_for_occupation"].get(occ, [])
-
-        # Season colors
+            results["style_tips"] = database["styles_for_occupation"].get(kwargs["occupation"], [])
         if "season" in kwargs:
-            season = kwargs["season"]
-            results["season_colors"] = self._database["colors_season"].get(season, [])
+            results["season_colors"] = database["colors_season"].get(kwargs["season"], [])
 
         return results
 
 
 class WeatherCheckTool(BaseTool):
-    """Weather check tool"""
+    """Weather check tool using LLM"""
 
-    def __init__(self):
+    def __init__(self, llm: LocalLLM = None):
         super().__init__("weather_check", "Check weather information")
+        self.llm = llm
 
     def execute(self, location: str = "Beijing", **kwargs) -> Dict[str, Any]:
-        """Simulate weather check"""
-        # Could integrate real weather API in production
+        """Check weather using LLM or fallback"""
+        season = kwargs.get("season", "spring")
+        mood = kwargs.get("mood", "normal")
+
+        if self.llm and self.llm.available:
+            prompt = f"""Provide weather information for {location} in {season} season and give clothing suggestions based on mood: {mood}
+
+Provide in JSON format:
+{{
+    "location": "{location}",
+    "temperature": "temperature range",
+    "weather": "weather condition",
+    "humidity": "humidity level",
+    "clothing_suggestion": "what to wear"
+}}"""
+            response = self.llm.invoke(prompt)
+            try:
+                import json
+                start = response.find("{")
+                end = response.rfind("}") + 1
+                if start >= 0 and end > start:
+                    data = json.loads(response[start:end])
+                    data["suggestion"] = data.get("clothing_suggestion", "")
+                    return data
+            except:
+                pass
+
+        # Fallback
+        season_temp = {
+            "spring": "15-25°C",
+            "summer": "25-35°C",
+            "autumn": "10-20°C",
+            "winter": "-5-10°C"
+        }
         return {
             "location": location,
-            "temperature": "20°C",
-            "weather": "sunny",
-            "humidity": "50%",
+            "temperature": season_temp.get(season, "20°C"),
+            "weather": "sunny" if season in ["spring", "summer"] else "cloudy",
+            "humidity": "50-70%",
             "suggestion": "Suitable for lightweight clothing",
         }
 
 
 class StyleRecommendTool(BaseTool):
-    """Style recommendation tool"""
+    """Style recommendation tool using LLM"""
 
-    def __init__(self):
+    def __init__(self, llm: LocalLLM = None):
         super().__init__("style_recommend", "Recommend fashion style")
-        self._style_db = {
+        self.llm = llm
+
+    def execute(self, style: str = "casual", **kwargs) -> Dict[str, Any]:
+        """Recommend style using LLM or fallback"""
+        age = kwargs.get("age", 25)
+        occupation = kwargs.get("occupation", "general")
+        mood = kwargs.get("mood", "normal")
+        budget = kwargs.get("budget", "medium")
+
+        if self.llm and self.llm.available:
+            prompt = f"""Recommend {style} style outfit items for:
+- Age: {age}
+- Occupation: {occupation}
+- Mood: {mood}
+- Budget: {budget}
+
+Provide in JSON format:
+{{
+    "style": "{style}",
+    "items": ["item1", "item2", "item3", "item4"],
+    "tips": ["tip1", "tip2"]
+}}"""
+            response = self.llm.invoke(prompt)
+            try:
+                import json
+                start = response.find("{")
+                end = response.rfind("}") + 1
+                if start >= 0 and end > start:
+                    data = json.loads(response[start:end])
+                    return data
+            except:
+                pass
+
+        # Fallback
+        style_db = {
             "casual": ["T-shirt", "jeans", "sneakers", "casual pants"],
             "formal": ["suit", "shirt", "dress shoes", "tie"],
             "sporty": ["sportswear", "sneakers", "sports pants", "hoodie"],
             "street": ["streetwear", "oversized", "sneakers", "accessories"],
             "minimalist": ["solid color", "minimalist", "basic", "black white gray"],
         }
-
-    def execute(self, style: str = "casual", **kwargs) -> Dict[str, Any]:
         return {
             "style": style,
-            "items": self._style_db.get(style, []),
-            "tips": f"Recommend {style} style outfit",
+            "items": style_db.get(style, []),
+            "tips": [f"Recommend {style} style outfit"],
         }
 
 
@@ -278,14 +374,18 @@ class AgentResourceFactory:
     """Agent resource factory"""
 
     @staticmethod
-    def create_for_category(category: str, storage=None) -> AgentResources:
+    def create_for_category(category: str, storage=None, llm: LocalLLM = None) -> AgentResources:
         """Create resources for specific category"""
         resources = AgentResources(agent_id=f"agent_{category}")
 
-        # Add common tools
-        resources.add_tool(FashionSearchTool())
-        resources.add_tool(WeatherCheckTool())
-        resources.add_tool(StyleRecommendTool())
+        # Add common tools (with LLM)
+        fashion_tool = FashionSearchTool(llm)
+        weather_tool = WeatherCheckTool(llm)
+        style_tool = StyleRecommendTool(llm)
+        
+        resources.add_tool(fashion_tool)
+        resources.add_tool(weather_tool)
+        resources.add_tool(style_tool)
 
         # Add data sources
         resources.add_data_source(FashionDatabase())
