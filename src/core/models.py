@@ -24,7 +24,7 @@ class Gender(str, Enum):
 
 @dataclass
 class UserProfile:
-    """user profile"""
+    """user profile with context awareness"""
 
     name: str
     gender: Gender
@@ -36,7 +36,14 @@ class UserProfile:
     budget: str = "medium"  #  low/medium/high
     season: str = "spring"
     occasion: str = "daily"
-
+    
+    # Context awareness fields
+    previous_recommendations: List[str] = field(default_factory=list)  # History of recommended items
+    preferred_colors: List[str] = field(default_factory=list)  # User's preferred colors
+    rejected_items: List[str] = field(default_factory=list)  # Items user rejected
+    body_type: str = ""  # Body type for better recommendations
+    skin_tone: str = ""  # Skin tone for color matching
+    
     def to_prompt_context(self) -> str:
         """transform user profile to prompt context"""
         hobbies_str = "、".join(self.hobbies) if self.hobbies else "无"
@@ -46,18 +53,41 @@ class UserProfile:
             "depressed": "心情压抑",
             "excited": "心情激动",
         }.get(self.mood, "心情一般")
-
-        return f"""用户信息:
-- 姓名: {self.name}
-- 性别: {"男" if self.gender == Gender.MALE else "女"}
-- 年龄: {self.age}岁
-- 职业: {self.occupation}
-- 爱好: {hobbies_str}
-- 今日心情: {mood_desc}
-- 风格偏好: {self.style_preference or "无特定偏好"}
-- 预算: {self.budget}
-- 季节: {self.season}
-- 场合: {self.occasion}"""
+        
+        # Build context sections
+        context_parts = [
+            f"- 姓名: {self.name}",
+            f"- 性别: {"男" if self.gender == Gender.MALE else "女"}",
+            f"- 年龄: {self.age}岁",
+            f"- 职业: {self.occupation}",
+            f"- 爱好: {hobbies_str}",
+            f"- 今日心情: {mood_desc}",
+            f"- 风格偏好: {self.style_preference or "无特定偏好"}",
+            f"- 预算: {self.budget}",
+            f"- 季节: {self.season}",
+            f"- 场合: {self.occasion}",
+        ]
+        
+        # Add context awareness fields if available
+        if self.previous_recommendations:
+            prev_str = "、".join(self.previous_recommendations[-5:])  # Last 5 items
+            context_parts.append(f"- 历史推荐: {prev_str}")
+        
+        if self.preferred_colors:
+            colors_str = "、".join(self.preferred_colors)
+            context_parts.append(f"- 喜好的颜色: {colors_str}")
+            
+        if self.rejected_items:
+            rejected_str = "、".join(self.rejected_items[-3:])  # Last 3 rejected
+            context_parts.append(f"- 拒绝过的单品: {rejected_str}")
+        
+        if self.body_type:
+            context_parts.append(f"- 体型: {self.body_type}")
+            
+        if self.skin_tone:
+            context_parts.append(f"- 肤色: {self.skin_tone}")
+        
+        return "用户信息:\n" + "\n".join(context_parts)
 
 
 @dataclass

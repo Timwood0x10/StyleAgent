@@ -150,15 +150,136 @@ class LeaderAgent:
             return None
         return None
 
+    def _enrich_user_context(self, profile: UserProfile, user_input: str) -> UserProfile:
+        """
+        Enrich user profile with context from previous sessions
+        
+        Loads user history to provide:
+        - previous_recommendations: Items user liked before
+        - preferred_colors: Colors user prefers
+        - rejected_items: Items user rejected
+        """
+        try:
+            # Try to get user context from storage based on name
+            if profile.name and profile.name != "User":
+                # Search for similar users or previous sessions
+                # For now, we'll use RAG to find relevant history
+                query = f"user {profile.name} {profile.gender.value} {profile.occupation}"
+                try:
+                    embedding = self.llm.embed(query)
+                    similar = self._db.db.search_similar(embedding, limit=3)
+                    
+                    if similar:
+                        # Extract context from similar sessions
+                        for row in similar:
+                            content = row.get("content", "")
+                            metadata = row.get("metadata", {})
+                            
+                            # Load preferred colors
+                            if metadata.get("preferred_colors"):
+                                profile.preferred_colors = metadata["preferred_colors"]
+                            
+                            # Load rejected items
+                            if metadata.get("rejected_items"):
+                                profile.rejected_items = metadata.get("rejected_items", [])
+                            
+                            logger.info(f"Loaded context from session {row.get('session_id', 'unknown')}")
+                except Exception as e:
+                    logger.debug(f"Could not load user context: {e}")
+                    
+        except Exception as e:
+            logger.warning(f"Failed to enrich user context: {e}")
+        
+        return profile
+
+    def _analyze_required_categories(self, user_profile: UserProfile) -> List[str]:
+        """
+        Analyze user profile to determine which categories to recommend
+        
+        Uses LLM to intelligently decide based on:
+        - User's occasion (daily/work/date/party)
+        - User's budget
+        - User's season
+        - Explicit mentions in original input
+        """
+
+        prompt = f"""Based on the following user profile, determine which clothing categories to recommend.
+
+User Profile:
+- Name: {user_profile.name}
+- Gender: {user_profile.gender.value}
+- Age: {user_profile.age}
+- Occupation: {user_profile.occupation}
+- Mood: {user_profile.mood}
+- Budget: {user_profile.budget}
+- Season: {user_profile.season}
+- Occasion: {user_profile.occasion}
+
+Available categories:
+- head: head accessories (hats, glasses, necklaces, earrings)
+- top: tops (T-shirts, shirts, jackets, hoodies)
+- bottom: bottoms (jeans, pants, skirts)
+- shoes: shoes (sneakers, dress shoes, casual shoes)
+
+Return a JSON list of categories to recommend. Examples:
+- Full outfit: ["head", "top", "bottom", "shoes"]
+- Just top and bottom: ["top", "bottom"]
+- Accessory focused: ["head"]
+- Only shoes: ["shoes"]
+
+Consider:
+1. If occasion is "work", recommend professional outfits
+2. If budget is "low", focus on essential categories
+3. If user mentions specific items, prioritize those
+4. For "date" or "party", include all categories for complete outfit
+
+Return ONLY JSON array like ["head", "top"], no other text.
+"""
+
+        try:
+            # Use circuit breaker protected LLM call
+            response = self._llm_call_with_circuit_breaker(
+                "analyze_categories",
+                self.llm.invoke,
+                prompt=prompt,
+                system_prompt="You are a fashion expert. Analyze user needs and return appropriate categories.",
+            )
+            
+            if not response:
+                return []
+            
+            # Parse response
+            start = response.find("[")
+            end = response.rfind("]") + 1
+            if start >= 0 and end > start:
+                categories = json.loads(response[start:end])
+                # Validate categories
+                valid_categories = {"head", "top", "bottom", "shoes"}
+                categories = [c for c in categories if c in valid_categories]
+                if categories:
+                    logger.info(f"LLM determined categories: {categories}")
+                    return categories
+            
+        except Exception as e:
+            logger.warning(f"Failed to analyze categories with LLM: {e}")
+        
+        return []  # Will fallback to default
+
     def process(self, user_input: str) -> OutfitResult:
         """Process user input - full workflow"""
         logger.info("Leader Agent starting processing")
         logger.debug(f"User input: {user_input}")
 
+        # 0. Generate session ID
+        self.session_id = str(uuid.uuid4())
+
         # 1. Parse user profile
         logger.info("Parsing user profile")
         profile = self.parse_user_profile(user_input)
-        self.session_id = str(uuid.uuid4())
+        
+        # 1.5. Load user context from previous sessions (context awareness)
+        logger.info("Loading user context from history")
+        profile = self._enrich_user_context(profile, user_input)
 
         # 2. Create tasks
         logger.info("Creating outfit tasks")
@@ -297,30 +418,42 @@ Only return JSON, no other content.
         )
 
     def create_tasks(self, user_profile: UserProfile) -> List[OutfitTask]:
-        """Create outfit tasks"""
+        """
+        Create outfit tasks with intelligent decomposition
+        
+        Uses LLM to analyze user needs and determine which categories to recommend.
+        Falls back to default 4 categories if LLM fails.
+        """
 
-        task_configs = [
-            {
-                "category": "head",
-                "agent_id": "agent_head",
-                "desc": "head accessories recommendation",
-            },
-            {
-                "category": "top",
-                "agent_id": "agent_top",
-                "desc": "top clothing recommendation",
-            },
-            {
-                "category": "bottom",
-                "agent_id": "agent_bottom",
-                "desc": "bottom clothing recommendation",
-            },
-            {
-                "category": "shoes",
-                "agent_id": "agent_shoes",
-                "desc": "shoes recommendation",
-            },
-        ]
+        # Try intelligent task decomposition with LLM
+        categories = self._analyze_required_categories(user_profile)
+        
+        # If LLM fails, use default categories
+        if not categories:
+            categories = ["head", "top", "bottom", "shoes"]
+            logger.info("Using default categories due to LLM failure")
+
+        # Build task configs based on determined categories
+        task_configs = []
+        category_agent_map = {
+            "head": "agent_head",
+            "top": "agent_top",
+            "bottom": "agent_bottom",
+            "shoes": "agent_shoes",
+        }
+        category_desc_map = {
+            "head": "head accessories recommendation",
+            "top": "top clothing recommendation",
+            "bottom": "bottom clothing recommendation",
+            "shoes": "shoes recommendation",
+        }
+
+        for cat in categories:
+            task_configs.append({
+                "category": cat,
+                "agent_id": category_agent_map.get(cat, f"agent_{cat}"),
+                "desc": category_desc_map.get(cat, f"{cat} recommendation"),
+            })
 
         tasks = []
         for config in task_configs:
@@ -641,6 +774,12 @@ class AsyncLeaderAgent:
         )
         self.retry_handler = RetryHandler(retry_config)
 
+        # Initialize circuit breaker for LLM calls
+        self.circuit_breaker = CircuitBreaker(
+            failure_threshold=5,
+            timeout=60
+        )
+
     async def _init_mq(self):
         """Initialize async message queue"""
         from ..protocol import get_async_message_queue, AsyncAHPSender
@@ -648,6 +787,93 @@ class AsyncLeaderAgent:
         if self.mq is None:
             self.mq = await get_async_message_queue()
             self.sender = AsyncAHPSender(self.mq)
+
+    async def _llm_call_with_circuit_breaker(
+        self,
+        func_name: str,
+        func,
+        *args,
+        **kwargs
+    ) -> Any:
+        """Execute LLM call with circuit breaker and retry (async version)"""
+        from typing import Callable
+
+        # Check circuit breaker
+        if not self.circuit_breaker.can_execute():
+            logger.warning(f"Circuit breaker OPEN for {func_name}, using fallback")
+            return self._get_fallback_result(func_name)
+
+        try:
+            # Execute with retry (sync version for simplicity)
+            result = self.retry_handler.execute_with_retry(
+                func,
+                task_id=f"async_leader_{func_name}",
+                *args,
+                **kwargs
+            )
+            self.circuit_breaker.record_success()
+            return result
+        except Exception as e:
+            self.circuit_breaker.record_failure()
+            logger.error(f"Circuit breaker recorded failure for {func_name}: {e}")
+            return self._get_fallback_result(func_name)
+
+    def _get_fallback_result(self, func_name: str) -> Any:
+        """Get fallback result when circuit is open or retry exhausted"""
+        if func_name == "parse_user_profile":
+            return UserProfile(
+                name="User",
+                gender=Gender.MALE,
+                age=25,
+                occupation="",
+                hobbies=[],
+                mood="normal",
+                budget="medium",
+                season="spring",
+                occasion="daily",
+            )
+        elif func_name == "aggregate_results":
+            return None
+        return None
+
+    async def _analyze_required_categories(self, user_profile: UserProfile) -> List[str]:
+        """Analyze user profile to determine which categories to recommend (async)"""
+
+        prompt = f"""Based on the following user profile, determine which clothing categories to recommend.
+
+User Profile:
+- Name: {user_profile.name}
+- Gender: {user_profile.gender.value}
+- Age: {user_profile.age}
+- Occupation: {user_profile.occupation}
+- Mood: {user_profile.mood}
+- Budget: {user_profile.budget}
+- Season: {user_profile.season}
+- Occasion: {user_profile.occasion}
+
+Available categories: head, top, bottom, shoes
+
+Return ONLY JSON array like ["head", "top"], no other text.
+"""
+
+        try:
+            response = await self.llm.ainvoke(prompt, SYSTEM_PROMPT)
+            if not response:
+                return []
+            
+            start = response.find("[")
+            end = response.rfind("]") + 1
+            if start >= 0 and end > start:
+                categories = json.loads(response[start:end])
+                valid_categories = {"head", "top", "bottom", "shoes"}
+                categories = [c for c in categories if c in valid_categories]
+                if categories:
+                    logger.info(f"LLM determined categories: {categories}")
+                    return categories
+        except Exception as e:
+            logger.warning(f"Failed to analyze categories with LLM: {e}")
+        
+        return []
 
     def _save_for_rag(
         self, 
@@ -809,16 +1035,36 @@ Please return JSON in the following format:
         )
 
     def create_tasks(self, user_profile: UserProfile) -> List[OutfitTask]:
-        """Create outfit tasks"""
+        """Create outfit tasks with intelligent decomposition"""
+        
+        # Try intelligent task decomposition with LLM
+        categories = self._analyze_required_categories(user_profile)
+        
+        # If LLM fails, use default categories
+        if not categories:
+            categories = ["head", "top", "bottom", "shoes"]
+            logger.info("Using default categories due to LLM failure")
+
+        category_agent_map = {
+            "head": "agent_head",
+            "top": "agent_top",
+            "bottom": "agent_bottom",
+            "shoes": "agent_shoes",
+        }
+        category_desc_map = {
+            "head": "head accessories recommendation",
+            "top": "top clothing recommendation",
+            "bottom": "bottom clothing recommendation",
+            "shoes": "shoes recommendation",
+        }
+
         task_configs = [
-            {"category": "head", "agent_id": "agent_head", "desc": "head accessories"},
-            {"category": "top", "agent_id": "agent_top", "desc": "top clothing"},
             {
-                "category": "bottom",
-                "agent_id": "agent_bottom",
-                "desc": "bottom clothing",
-            },
-            {"category": "shoes", "agent_id": "agent_shoes", "desc": "shoes"},
+                "category": cat,
+                "agent_id": category_agent_map.get(cat, f"agent_{cat}"),
+                "desc": category_desc_map.get(cat, f"{cat} recommendation"),
+            }
+            for cat in categories
         ]
 
         tasks = []
