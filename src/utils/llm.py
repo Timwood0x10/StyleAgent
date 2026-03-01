@@ -3,6 +3,8 @@ Local Model Integration - gpt-oss-20b
 """
 
 import requests
+import httpx
+import asyncio
 from .config import config
 
 
@@ -28,18 +30,18 @@ class LocalLLM:
     def _check_connection(self) -> bool:
         """Check if model service is available"""
         try:
-            resp = requests.get(f"{self.base_url}/models", timeout=5)
+            resp = requests.get(f"{self.base_url}/api/tags", timeout=5)
             if resp.status_code == 200:
                 models = resp.json()
-                for m in models.get("data", []):
-                    if self.model_name in m.get("id", ""):
+                for m in models.get("models", []):
+                    if self.model_name in m.get("name", ""):
                         return True
             return False
         except:
             return False
 
     def invoke(self, prompt: str, system_prompt: str = "") -> str:
-        """Invoke model"""
+        """Invoke model (sync)"""
         if not self.available:
             return "Local model not connected"
 
@@ -50,19 +52,41 @@ class LocalLLM:
 
         try:
             resp = requests.post(
-                f"{self.base_url}/chat/completions",
+                f"{self.base_url}/api/chat",
                 json={
                     "model": self.model_name,
                     "messages": messages,
                     "temperature": self.temperature,
                     "max_tokens": self.max_tokens,
+                    "stream": False,
                 },
                 timeout=60,
             )
             data = resp.json()
-            return data["choices"][0]["message"]["content"]
+            return data["message"]["content"]
         except Exception as e:
             return f"Invocation failed: {e}"
+
+    async def ainvoke(self, prompt: str, system_prompt: str = "") -> str:
+        """Invoke model (async) - using thread pool to avoid httpx issues"""
+        import asyncio
+
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self.invoke, prompt, system_prompt)
+
+    async def acheck_connection(self) -> bool:
+        """Check if model service is available (async)"""
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(f"{self.base_url}/api/tags", timeout=5.0)
+                if resp.status_code == 200:
+                    models = resp.json()
+                    for m in models.get("models", []):
+                        if self.model_name in m.get("name", ""):
+                            return True
+                return False
+        except:
+            return False
 
     def __repr__(self):
         status = "connected" if self.available else "not connected"
@@ -77,6 +101,11 @@ class MockLLM:
         self.available = True
 
     def invoke(self, prompt: str, system_prompt: str = "") -> str:
+        return self.response
+
+    async def ainvoke(self, prompt: str, system_prompt: str = "") -> str:
+        """Mock async invoke"""
+        await asyncio.sleep(0.1)  # Simulate async delay
         return self.response
 
 
