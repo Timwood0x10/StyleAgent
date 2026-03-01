@@ -537,6 +537,7 @@ class StorageLayer:
             ON CONFLICT (session_id, agent_id) DO UPDATE SET
                 context_data = EXCLUDED.context_data,
                 updated_at = NOW()
+            RETURNING id
         """
         cursor = self.db.execute(sql, (session_id, agent_id, json.dumps(context_data)))
         result = cursor.fetchone()

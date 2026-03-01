@@ -61,8 +61,9 @@ class TaskRegistry:
 
     def __init__(self, storage=None):
         self._storage = storage
-        self._memory_cache: Dict[str, TaskRecord] = {}
+        self._memory_cache: Dict[str, Any] = {}
         self._locks: Dict[str, threading.Lock] = {}
+        self._locks_lock = threading.Lock()  # Lock to protect _locks dictionary
 
     @property
     def storage(self):
@@ -72,10 +73,11 @@ class TaskRegistry:
         return self._storage
 
     def _get_lock(self, task_id: str) -> threading.Lock:
-        """Get task lock"""
-        if task_id not in self._locks:
-            self._locks[task_id] = threading.Lock()
-        return self._locks[task_id]
+        """Get task lock - thread-safe"""
+        with self._locks_lock:
+            if task_id not in self._locks:
+                self._locks[task_id] = threading.Lock()
+            return self._locks[task_id]
 
     def register_task(
         self,
@@ -140,14 +142,14 @@ class TaskRegistry:
                     return False
                 self._memory_cache[task_id] = task
 
-            # Check status
-            if task.status != TaskStatus.PENDING:
+            # Check status - task is a Dict, use bracket notation
+            if task.get("status") != TaskStatus.PENDING:
                 return False
 
-            # Claim task
-            task.status = TaskStatus.IN_PROGRESS
-            task.assignee_agent_id = agent_id
-            task.updated_at = datetime.now()
+            # Claim task - update Dict fields
+            task["status"] = TaskStatus.IN_PROGRESS
+            task["assignee_agent_id"] = agent_id
+            task["updated_at"] = datetime.now()
 
             # Update storage
             try:

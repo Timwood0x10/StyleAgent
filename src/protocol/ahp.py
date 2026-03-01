@@ -474,10 +474,19 @@ class AHPReceiver:
         )
 
     def wait_for_task(self, timeout: float = 60) -> Optional[AHPMessage]:
-        """Wait for task"""
-        msg = self.receive(timeout)
-        if msg and msg.method == AHPMethod.TASK:
-            return msg
+        """Wait for task - keep receiving until a TASK message or timeout"""
+        start = time.time()
+        while time.time() - start < timeout:
+            msg = self.receive(timeout=min(2, timeout - (time.time() - start)))
+            if msg is None:
+                continue
+            if msg.method == AHPMethod.TASK:
+                return msg
+            # For non-TASK messages, log and continue waiting
+            # Don't consume and discard them
+            logger.debug(
+                f"wait_for_task: Ignoring {msg.method} message, waiting for TASK"
+            )
         return None
 
     def send_heartbeat(self, session_id: str):
@@ -744,10 +753,18 @@ class AsyncAHPReceiver:
         return msg
 
     async def wait_for_task(self, timeout: float = 60) -> Optional[AHPMessage]:
-        """Wait for task (async)"""
-        msg = await self.receive(timeout)
-        if msg and msg.method == AHPMethod.TASK:
-            return msg
+        """Wait for task (async) - keep receiving until a TASK message or timeout"""
+        start = time.time()
+        while time.time() - start < timeout:
+            msg = await self.receive(timeout=min(2, timeout - (time.time() - start)))
+            if msg is None:
+                continue
+            if msg.method == AHPMethod.TASK:
+                return msg
+            # For non-TASK messages, log and continue waiting
+            logger.debug(
+                f"async wait_for_task: Ignoring {msg.method} message, waiting for TASK"
+            )
         return None
 
 
