@@ -1,3 +1,3 @@
 """
-iFlow Test Suite
+Test Suite
 """
