@@ -2,7 +2,7 @@
 
 ## Overview
 
-The AHP (Agent HTTP-like Protocol) is a lightweight inter-agent communication protocol designed for the iFlow multi-agent system. It provides reliable message delivery, task distribution, and result collection between the Leader Agent and multiple Sub Agents.
+The AHP (Agent HTTP-like Protocol) is a lightweight inter-agent communication protocol designed for the  multi-agent system. It provides reliable message delivery, task distribution, and result collection between the Leader Agent and multiple Sub Agents.
 
 ## Architecture
 
@@ -33,15 +33,15 @@ The AHP (Agent HTTP-like Protocol) is a lightweight inter-agent communication pr
 
 ## Message Types
 
-| Method | Direction | Description |
-|--------|-----------|-------------|
-| `TASK` | Leader → Sub | Dispatch task to sub-agent |
-| `ACK` | Bidirectional | Message acknowledgment |
-| `RESULT` | Sub → Leader | Return task result |
-| `PROGRESS` | Sub → Leader | Progress report |
-| `HEARTBEAT` | Bidirectional | Health check |
-| `TOKEN_REQUEST` | Sub → Leader | Token quota request |
-| `TOKEN_RESPONSE` | Leader → Sub | Token quota response |
+| Method             | Direction     | Description                |
+| ------------------ | ------------- | -------------------------- |
+| `TASK`           | Leader → Sub | Dispatch task to sub-agent |
+| `ACK`            | Bidirectional | Message acknowledgment     |
+| `RESULT`         | Sub → Leader | Return task result         |
+| `PROGRESS`       | Sub → Leader | Progress report            |
+| `HEARTBEAT`      | Bidirectional | Health check               |
+| `TOKEN_REQUEST`  | Sub → Leader | Token quota request        |
+| `TOKEN_RESPONSE` | Leader → Sub | Token quota response       |
 
 ## Message Format
 
@@ -63,16 +63,16 @@ class AHPMessage:
 
 ### Error Codes
 
-| Code | Description |
-|------|-------------|
-| `UNKNOWN` | Unknown error |
-| `INVALID_MESSAGE` | Invalid message format |
-| `TIMEOUT` | Operation timeout |
-| `AGENT_NOT_FOUND` | Target agent not found |
-| `QUEUE_FULL` | Message queue is full |
-| `SERIALIZATION_ERROR` | Serialization failed |
-| `DESERIALIZATION_ERROR` | Deserialization failed |
-| `RETRY_EXHAUSTED` | Maximum retries exceeded |
+| Code                      | Description              |
+| ------------------------- | ------------------------ |
+| `UNKNOWN`               | Unknown error            |
+| `INVALID_MESSAGE`       | Invalid message format   |
+| `TIMEOUT`               | Operation timeout        |
+| `AGENT_NOT_FOUND`       | Target agent not found   |
+| `QUEUE_FULL`            | Message queue is full    |
+| `SERIALIZATION_ERROR`   | Serialization failed     |
+| `DESERIALIZATION_ERROR` | Deserialization failed   |
+| `RETRY_EXHAUSTED`       | Maximum retries exceeded |
 
 ### AHPError Class
 
@@ -222,6 +222,7 @@ pytest tests/test_ahp.py -v
 ```
 
 Test coverage includes:
+
 - Message serialization/deserialization
 - ACK message handling
 - DLQ operations

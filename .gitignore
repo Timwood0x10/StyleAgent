@@ -50,3 +50,7 @@ plan/
 .pytest_cache/
 
 logs/
+
+.ruff_cache/
+
+.mypy_cache/

@@ -36,7 +36,7 @@ class Config:
                 Config._yaml_config = yaml.safe_load(f) or {}
         Config._loaded = True
 
-    def _get(self, key: str, default: Any = None, env_key: str = None) -> Any:
+    def _get(self, key: str, default: Any = None, env_key: Optional[str] = None) -> Any:
         """Get config value - yaml first, then .env, then default"""
         # Try .env first for sensitive data
         if env_key:
@@ -46,7 +46,7 @@ class Config:
 
         # Try yaml
         keys = key.split(".")
-        value = Config._yaml_config
+        value: Any = Config._yaml_config
         for k in keys:
             if isinstance(value, dict):
                 value = value.get(k)
@@ -114,6 +114,19 @@ class Config:
     @property
     def LLM_TIMEOUT(self) -> int:
         return int(self._get("llm.timeout", 60))
+
+    # ==================== Embedding ====================
+    @property
+    def EMBEDDING_MODEL(self) -> str:
+        return self._get("embedding.model", "text-embedding-3-small")
+
+    @property
+    def EMBEDDING_BASE_URL(self) -> str:
+        return self._get("embedding.base_url", None)  # None means use LLM_BASE_URL
+
+    @property
+    def EMBEDDING_DIM(self) -> int:
+        return int(self._get("embedding.dimension", 1536))
 
     # ==================== AHP ====================
     @property

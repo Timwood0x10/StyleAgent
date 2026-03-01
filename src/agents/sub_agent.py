@@ -5,7 +5,7 @@ Sub Agent - Outfit Recommendation Execution (using AHP Protocol)
 import asyncio
 import json
 import threading
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from ..core.models import (
     UserProfile,
     OutfitRecommendation,
@@ -16,6 +16,8 @@ from ..core.models import (
 from ..utils.llm import LocalLLM
 from ..utils import get_logger
 from ..protocol import get_message_queue, AHPReceiver, AHPSender, AHPError, AHPErrorCode
+from ..storage.postgres import StorageLayer
+from ..core.errors import RetryHandler, RetryConfig, ErrorType, CircuitBreaker
 
 # Logger for this module
 logger = get_logger(__name__)
@@ -62,8 +64,34 @@ class OutfitSubAgent:
         )
         self.mq = get_message_queue()
         self.receiver = AHPReceiver(agent_id, self.mq)
-        self.sender = AHPSender(self.mq)
+        self.sender = AHPSender(self.mq, self.agent_id)
         self._running = False
+
+        # Initialize database for RAG
+        self._db: Optional[StorageLayer] = None
+
+        # Initialize retry handler
+        retry_config = RetryConfig(
+            max_retries=3,
+            initial_delay=1.0,
+            max_delay=30.0,
+            backoff_factor=2.0,
+            retry_on=[
+                ErrorType.LLM_FAILED,
+                ErrorType.NETWORK,
+                ErrorType.TIMEOUT,
+            ],
+        )
+        self.retry_handler = RetryHandler(retry_config)
+
+        # Initialize circuit breaker for LLM calls
+        self.circuit_breaker = CircuitBreaker(failure_threshold=5, timeout=60)
+
+    def _get_db(self) -> StorageLayer:
+        """Lazy init database connection"""
+        if self._db is None:
+            self._db = StorageLayer()
+        return self._db
 
     def start(self):
         """Start agent (listen to message queue)"""
@@ -119,7 +147,9 @@ class OutfitSubAgent:
             self.sender.send_progress(
                 "leader", task_id, session_id, 0.5, "Recommending..."
             )
-            result = self._recommend(profile)
+            # Get compact_instruction from payload (token control)
+            compact_instruction = payload.get("compact_instruction", "")
+            result = self._recommend(profile, compact_instruction)
 
             self.sender.send_progress("leader", task_id, session_id, 0.9, "Completed")
 
@@ -142,12 +172,6 @@ class OutfitSubAgent:
             logger.info(f"[{self.agent_id}] task completed")
 
         except Exception as e:
-            error = AHPError(
-                message=f"Task execution failed: {str(e)}",
-                code=AHPErrorCode.UNKNOWN,
-                agent_id=self.agent_id,
-                task_id=task_id,
-            )
             self.sender.send_result(
                 "leader", task_id, session_id, {"error": str(e)}, status="failed"
             )
@@ -155,12 +179,117 @@ class OutfitSubAgent:
             self.mq.to_dlq(self.agent_id, msg, str(e))
             logger.error(f"[{self.agent_id}] task failed: {e}")
 
-    def _recommend(self, user_profile: UserProfile) -> OutfitRecommendation:
-        """Execute recommendation with tools"""
+    def _get_rag_context(self, user_profile: UserProfile, limit: int = 3) -> str:
+        """
+        Get RAG context from historical recommendations
+
+        Args:
+            user_profile: User profile for generating query
+            limit: Maximum number of similar recommendations to retrieve
+
+        Returns:
+            Formatted historical recommendations context
+        """
+        try:
+            # Generate query text from user profile
+            query_text = self._build_rag_query(user_profile)
+
+            # Generate embedding
+            embedding = self.llm.embed(query_text)
+
+            # Search similar recommendations in vector DB
+            db = self._get_db()
+            similar_results = db.search_similar(
+                embedding=embedding,
+                session_id=None,  # Search across all sessions
+                limit=limit,
+            )
+
+            if not similar_results:
+                return ""
+
+            # Format historical recommendations as context
+            context_parts = []
+            for i, result in enumerate(similar_results, 1):
+                content = result.get("content", "")
+                metadata = result.get("metadata", {})
+                if content:
+                    context_parts.append(
+                        f"- Similar recommendation {i}: {content} "
+                        f"(mood: {metadata.get('mood', 'N/A')}, "
+                        f"season: {metadata.get('season', 'N/A')})"
+                    )
+
+            return "\n".join(context_parts)
+
+        except Exception as e:
+            logger.warning(f"RAG context retrieval failed: {e}")
+            return ""
+
+    def _build_rag_query(self, user_profile: UserProfile) -> str:
+        """Build query text for RAG embedding"""
+        return (
+            f"Recommend {self.category} for user who is {user_profile.gender.value}, "
+            f"age {user_profile.age}, occupation {user_profile.occupation}, "
+            f"mood {user_profile.mood}, season {user_profile.season}, "
+            f"occasion {user_profile.occasion}, budget {user_profile.budget}"
+        )
+
+    def _llm_call_with_circuit_breaker(
+        self, func_name: str, func, *args, **kwargs
+    ) -> Any:
+        """
+        Execute LLM call with circuit breaker and retry
+        """
+        from typing import Callable
+
+        # Check circuit breaker
+        if not self.circuit_breaker.can_execute():
+            logger.warning(
+                f"Circuit breaker OPEN for {self.agent_id}:{func_name}, using fallback"
+            )
+            return self._get_fallback_result(func_name)
+
+        try:
+            # Execute with retry
+            result = self.retry_handler.execute_with_retry(
+                func, f"{self.agent_id}_{func_name}", *args, **kwargs
+            )
+            self.circuit_breaker.record_success()
+            return result
+        except Exception as e:
+            self.circuit_breaker.record_failure()
+            logger.error(
+                f"Circuit breaker recorded failure for {self.agent_id}:{func_name}: {e}"
+            )
+            return self._get_fallback_result(func_name)
+
+    def _get_fallback_result(self, func_name: str) -> Any:
+        """
+        Get fallback result when circuit is open or retry exhausted
+        """
+        if "recommend" in func_name:
+            # Return default recommendation
+            return json.dumps(
+                {
+                    "category": self.category,
+                    "items": ["basic item"],
+                    "colors": ["neutral color"],
+                    "styles": ["casual"],
+                    "reasons": ["default recommendation due to service unavailable"],
+                    "price_range": "medium",
+                }
+            )
+        return None
+
+    def _recommend(
+        self, user_profile: UserProfile, compact_instruction: str = ""
+    ) -> OutfitRecommendation:
+        """Execute recommendation with tools and RAG"""
 
         # Use tools to get additional context
         from .resources import AgentResourceFactory
-        
+
         resources = AgentResourceFactory.create_for_category(
             self.category, llm=self.llm
         )
@@ -171,7 +300,7 @@ class OutfitSubAgent:
             mood=user_profile.mood,
             occupation=user_profile.occupation,
             season=user_profile.season,
-            age=user_profile.age
+            age=user_profile.age,
         )
 
         # Get weather info
@@ -179,7 +308,7 @@ class OutfitSubAgent:
             "weather_check",
             location="Beijing",
             season=user_profile.season,
-            mood=user_profile.mood
+            mood=user_profile.mood,
         )
 
         # Get style recommendations
@@ -189,18 +318,42 @@ class OutfitSubAgent:
             age=user_profile.age,
             occupation=user_profile.occupation,
             mood=user_profile.mood,
-            budget=user_profile.budget
+            budget=user_profile.budget,
         )
 
-        # Build enhanced prompt with tool results
-        prompt = self._build_prompt(user_profile, fashion_info, weather_info, style_info)
-        response = self.llm.invoke(prompt, self.system_prompt)
+        # RAG: Search similar historical recommendations
+        rag_context = self._get_rag_context(user_profile)
+
+        # Build enhanced prompt with tool results, compact_instruction and RAG context
+        prompt = self._build_prompt(
+            user_profile,
+            fashion_info,
+            weather_info,
+            style_info,
+            compact_instruction,
+            rag_context,
+        )
+
+        # Execute LLM call with circuit breaker
+        response = self._llm_call_with_circuit_breaker(
+            f"recommend_{self.category}",
+            self.llm.invoke,
+            prompt=prompt,
+            system_prompt=self.system_prompt,
+        )
 
         return self._parse_response(response)
 
-    def _build_prompt(self, user_profile: UserProfile, fashion_info: dict = None, 
-                      weather_info: dict = None, style_info: dict = None) -> str:
-        """Build prompt with tool results"""
+    def _build_prompt(
+        self,
+        user_profile: UserProfile,
+        fashion_info: dict = None,
+        weather_info: dict = None,
+        style_info: dict = None,
+        compact_instruction: str = "",
+        rag_context: str = "",
+    ) -> str:
+        """Build prompt with tool results and RAG context"""
 
         category_names = {
             "head": "head accessories (hats, glasses, necklaces, earrings, etc.)",
@@ -222,7 +375,7 @@ class OutfitSubAgent:
             colors = fashion_info.get("colors", [])
             style_tips = fashion_info.get("style_tips", [])
             season_colors = fashion_info.get("season_colors", [])
-            tool_context += f"\nFashion Database Suggestions:\n"
+            tool_context += "\nFashion Database Suggestions:\n"
             if colors:
                 tool_context += f"- Colors for mood: {', '.join(colors)}\n"
             if style_tips:
@@ -241,13 +394,26 @@ class OutfitSubAgent:
         if style_info:
             items = style_info.get("items", [])
             tips = style_info.get("tips", [])
-            tool_context += f"\nStyle Recommendations ({style_info.get('style', 'casual')}):\n"
+            tool_context += (
+                f"\nStyle Recommendations ({style_info.get('style', 'casual')}):\n"
+            )
             if items:
                 tool_context += f"- Recommended items: {', '.join(items[:4])}\n"
             if tips:
                 tool_context += f"- Tips: {', '.join(tips)}\n"
 
-        prompt = f"""User Info:
+        # Include compact instruction if provided
+        compact_section = ""
+        if compact_instruction:
+            compact_section = f"\n[Compact Instruction - follow this if available]:\n{compact_instruction}\n"
+
+        # Include RAG context from historical recommendations
+        rag_section = ""
+        if rag_context:
+            rag_section = f"\n[Historical Similar Recommendations - for reference]:\n{rag_context}\n"
+
+        prompt = f"""{compact_section}{rag_section}
+User Info:
 {user_profile.to_prompt_context()}
 {tool_context}
 
@@ -259,7 +425,7 @@ Requirements:
 1. Choose appropriate styles based on user's age ({user_profile.age}) and occupation ({user_profile.occupation})
 2. Consider season ({user_profile.season}) and occasion ({user_profile.occasion})
 3. Budget: {user_profile.budget}
-4. If user has hobbies: {', '.join(user_profile.hobbies)}, consider how these hobbies affect outfit choices
+4. If user has hobbies: {", ".join(user_profile.hobbies)}, consider how these hobbies affect outfit choices
 
 Please return JSON format:
 {{
@@ -412,7 +578,9 @@ class AsyncOutfitSubAgent:
             await self.sender.send_progress(
                 "leader", task_id, session_id, 0.5, "Recommending..."
             )
-            result = await self._recommend(profile)
+            # Get compact_instruction from payload (token control)
+            compact_instruction = payload.get("compact_instruction", "")
+            result = await self._recommend(profile, compact_instruction)
 
             await self.sender.send_progress(
                 "leader", task_id, session_id, 0.9, "Completed"
@@ -469,7 +637,9 @@ class AsyncOutfitSubAgent:
             reasons=["Waiting"],
         )
 
-    async def _recommend(self, user_profile: UserProfile) -> OutfitRecommendation:
+    async def _recommend(
+        self, user_profile: UserProfile, compact_instruction: str = ""
+    ) -> OutfitRecommendation:
         """Execute recommendation (async) with tools"""
         from .resources import AgentResourceFactory
 
@@ -483,7 +653,7 @@ class AsyncOutfitSubAgent:
             mood=user_profile.mood,
             occupation=user_profile.occupation,
             season=user_profile.season,
-            age=user_profile.age
+            age=user_profile.age,
         )
 
         # Get weather info
@@ -491,7 +661,7 @@ class AsyncOutfitSubAgent:
             "weather_check",
             location="Beijing",
             season=user_profile.season,
-            mood=user_profile.mood
+            mood=user_profile.mood,
         )
 
         # Get style recommendations
@@ -501,16 +671,24 @@ class AsyncOutfitSubAgent:
             age=user_profile.age,
             occupation=user_profile.occupation,
             mood=user_profile.mood,
-            budget=user_profile.budget
+            budget=user_profile.budget,
         )
 
-        # Build enhanced prompt
-        prompt = self._build_prompt(user_profile, fashion_info, weather_info, style_info)
+        # Build enhanced prompt with compact_instruction
+        prompt = self._build_prompt(
+            user_profile, fashion_info, weather_info, style_info, compact_instruction
+        )
         response = await self.llm.ainvoke(prompt, self.system_prompt)
         return self._parse_response(response)
 
-    def _build_prompt(self, user_profile: UserProfile, fashion_info: dict = None,
-                      weather_info: dict = None, style_info: dict = None) -> str:
+    def _build_prompt(
+        self,
+        user_profile: UserProfile,
+        fashion_info: dict = None,
+        weather_info: dict = None,
+        style_info: dict = None,
+        compact_instruction: str = "",
+    ) -> str:
         """Build prompt with tool results"""
         category_names = {
             "head": "head accessories (hats, glasses, necklaces, earrings, etc.)",
@@ -532,7 +710,7 @@ class AsyncOutfitSubAgent:
             colors = fashion_info.get("colors", [])
             style_tips = fashion_info.get("style_tips", [])
             season_colors = fashion_info.get("season_colors", [])
-            tool_context += f"\nFashion Database Suggestions:\n"
+            tool_context += "\nFashion Database Suggestions:\n"
             if colors:
                 tool_context += f"- Colors for mood: {', '.join(colors)}\n"
             if style_tips:
@@ -551,13 +729,22 @@ class AsyncOutfitSubAgent:
         if style_info:
             items = style_info.get("items", [])
             tips = style_info.get("tips", [])
-            tool_context += f"\nStyle Recommendations ({style_info.get('style', 'casual')}):\n"
+            tool_context += (
+                f"\nStyle Recommendations ({style_info.get('style', 'casual')}):\n"
+            )
             if items:
                 tool_context += f"- Recommended items: {', '.join(items[:4])}\n"
             if tips:
                 tool_context += f"- Tips: {', '.join(tips)}\n"
 
-        prompt = f"""User Info:
+        # Add compact instruction context if provided (token control)
+        compact_ctx = (
+            f"\nCompact Instruction: {compact_instruction}\n"
+            if compact_instruction
+            else ""
+        )
+
+        prompt = f"""{compact_ctx}User Info:
 {user_profile.to_prompt_context()}
 {tool_context}
 
@@ -569,7 +756,7 @@ Requirements:
 1. Choose appropriate styles based on user's age ({user_profile.age}) and occupation ({user_profile.occupation})
 2. Consider season ({user_profile.season}) and occasion ({user_profile.occasion})
 3. Budget: {user_profile.budget}
-4. If user has hobbies: {', '.join(user_profile.hobbies)}, consider how these hobbies affect outfit choices
+4. If user has hobbies: {", ".join(user_profile.hobbies)}, consider how these hobbies affect outfit choices
 
 Please return JSON format:
 {{

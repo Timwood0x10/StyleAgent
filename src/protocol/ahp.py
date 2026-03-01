@@ -19,7 +19,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
 from ..utils import get_logger
 
 # Logger for this module
@@ -202,7 +202,7 @@ class MessageQueue:
             self._dlq[agent_id].append(dlq_entry)
             logger.error(f"Message {message.message_id} moved to DLQ: {error}")
 
-    def get_dlq(self, agent_id: str = None) -> Dict[str, list]:
+    def get_dlq(self, agent_id: Optional[str] = None) -> Union[Dict[str, list], list]:
         """Get messages from Dead Letter Queue"""
         with self._lock:
             if agent_id:
@@ -238,7 +238,7 @@ class MessageQueue:
         last_heartbeat = self.get_heartbeat(agent_id)
         if not last_heartbeat:
             return True  # First record, assume alive
-        return (datetime.now() - last_heartbeat).seconds < timeout
+        return (datetime.now() - last_heartbeat).total_seconds() < timeout
 
 
 class TokenController:
@@ -302,9 +302,13 @@ class AHPSender:
     """AHP Sender"""
 
     def __init__(
-        self, message_queue: MessageQueue, token_controller: TokenController = None
+        self,
+        message_queue: MessageQueue,
+        agent_id: str = "leader",
+        token_controller: TokenController = None,
     ):
         self.mq = message_queue
+        self.agent_id = agent_id
         self.token_controller = token_controller or TokenController()
 
     def send_task(
@@ -358,7 +362,7 @@ class AHPSender:
         """Send result"""
         msg = AHPMessage(
             method=AHPMethod.RESULT,
-            agent_id="leader",
+            agent_id=self.agent_id,
             target_agent=target_agent,
             task_id=task_id,
             session_id=session_id,
@@ -378,7 +382,7 @@ class AHPSender:
         """Send progress"""
         msg = AHPMessage(
             method=AHPMethod.PROGRESS,
-            agent_id="leader",
+            agent_id=self.agent_id,
             target_agent=target_agent,
             task_id=task_id,
             session_id=session_id,
@@ -391,7 +395,7 @@ class AHPSender:
         """Send heartbeat"""
         msg = AHPMessage(
             method=AHPMethod.HEARTBEAT,
-            agent_id="leader",
+            agent_id=self.agent_id,
             target_agent=target_agent,
             task_id="",
             session_id=session_id,
@@ -410,7 +414,7 @@ class AHPSender:
         """Send acknowledgment for a message"""
         msg = AHPMessage(
             method=AHPMethod.ACK,
-            agent_id="leader",
+            agent_id=self.agent_id,
             target_agent=target_agent,
             task_id="",
             session_id=session_id,
@@ -603,7 +607,9 @@ class AsyncMessageQueue:
             self._dlq[agent_id].append(dlq_entry)
             logger.error(f"Message {message.message_id} moved to DLQ: {error}")
 
-    async def get_dlq(self, agent_id: str = None) -> Dict[str, list]:
+    async def get_dlq(
+        self, agent_id: Optional[str] = None
+    ) -> Union[Dict[str, list], list]:
         """Get messages from Dead Letter Queue (async)"""
         async with self._lock:
             if agent_id:
@@ -626,7 +632,7 @@ class AsyncMessageQueue:
         last_heartbeat = await self.get_heartbeat(agent_id)
         if not last_heartbeat:
             return True
-        return (datetime.now() - last_heartbeat).seconds < timeout
+        return (datetime.now() - last_heartbeat).total_seconds() < timeout
 
 
 class AsyncAHPSender:

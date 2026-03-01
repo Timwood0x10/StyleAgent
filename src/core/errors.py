@@ -73,7 +73,7 @@ class RetryConfig:
     initial_delay: float = 1.0  # Initial delay in seconds
     max_delay: float = 60.0  # Maximum delay in seconds
     backoff_factor: float = 2.0  # Exponential backoff factor
-    retry_on: List[ErrorType] = None  # Error types to retry
+    retry_on: Optional[List[ErrorType]] = None  # Error types to retry
 
     def __post_init__(self):
         if self.retry_on is None:
@@ -92,7 +92,7 @@ class RetryHandler:
     Uses exponential backoff algorithm for retry logic
     """
 
-    def __init__(self, config: RetryConfig = None):
+    def __init__(self, config: Optional[RetryConfig] = None):
         self.config = config or RetryConfig()
         self._attempts: Dict[str, int] = {}  # task_id -> attempt_count
 
@@ -106,7 +106,7 @@ class RetryHandler:
             return False
 
         # Check error type allowlist
-        if error.error_type not in self.config.retry_on:
+        if self.config.retry_on is None or error.error_type not in self.config.retry_on:
             return False
 
         return True
@@ -124,7 +124,7 @@ class RetryHandler:
         """Record attempt count"""
         self._attempts[task_id] = self._attempts.get(task_id, 0) + 1
 
-    def reset(self, task_id: str = None):
+    def reset(self, task_id: Optional[str] = None):
         """Reset counter"""
         if task_id:
             self._attempts.pop(task_id, None)
@@ -195,7 +195,7 @@ class FallbackHandler:
         """Execute primary, fallback on failure"""
         try:
             return primary(*args, **kwargs)
-        except Exception as e:
+        except Exception:
             fallback = self._fallbacks.get(fallback_name)
             if fallback:
                 print(f"   FALLBACK: using {fallback_name}")
@@ -295,7 +295,7 @@ class CircuitBreaker:
 _global_retry_handler: Optional[RetryHandler] = None
 
 
-def get_retry_handler(config: RetryConfig = None) -> RetryHandler:
+def get_retry_handler(config: Optional[RetryConfig] = None) -> RetryHandler:
     """Get retry handler instance"""
     global _global_retry_handler
     if _global_retry_handler is None:
