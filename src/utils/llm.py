@@ -5,6 +5,7 @@ Local Model Integration - gpt-oss-20b
 import requests
 import httpx
 import asyncio
+from typing import Optional, Union
 from .config import config
 
 
@@ -13,9 +14,9 @@ class LocalLLM:
 
     def __init__(
         self,
-        model_name: str = None,
-        base_url: str = None,
-        api_key: str = None,
+        model_name: Optional[str] = None,
+        base_url: Optional[str] = None,
+        api_key: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 2048,
     ):
@@ -109,7 +110,7 @@ class MockLLM:
         return self.response
 
 
-def create_llm(provider: str = "local", **kwargs) -> LocalLLM:
+def create_llm(provider: str = "local", **kwargs) -> Union[LocalLLM, MockLLM]:
     """Create LLM instance"""
     if provider == "local":
         return LocalLLM(**kwargs)

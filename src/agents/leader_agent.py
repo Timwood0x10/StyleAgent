@@ -128,7 +128,7 @@ Only return JSON, no other content.
         gender = Gender.MALE
         age = 25
         occupation = ""
-        hobbies = []
+        hobbies: list[str] = []
         mood = "normal"
 
         # Check for Chinese gender keywords
@@ -149,7 +149,6 @@ Only return JSON, no other content.
             age = int(age_match.group(1))
 
         # Extract occupation
-        occupations = ["chef", "doctor", "teacher", "programmer", "designer", "student"]
         occ_map = {
             "厨师": "chef",
             "医生": "doctor",
@@ -164,7 +163,6 @@ Only return JSON, no other content.
                 break
 
         # Extract hobbies
-        hobby_words = ["旅游", "运动", "音乐", "阅读", "游戏", "美食"]
         hobby_map = {
             "旅游": "travel",
             "运动": "sports",
@@ -256,8 +254,11 @@ Only return JSON, no other content.
 
             # Send via AHP protocol with error handling
             try:
+                target_agent = task.assignee_agent_id
+                if not target_agent:
+                    raise ValueError(f"Task {task.task_id} has no assignee agent")
                 self.sender.send_task(
-                    target_agent=task.assignee_agent_id,
+                    target_agent=target_agent,
                     task_id=task.task_id,
                     session_id=self.session_id,
                     payload=payload,
@@ -267,19 +268,14 @@ Only return JSON, no other content.
                     f"Dispatched task {task.task_id} to {task.assignee_agent_id}"
                 )
             except Exception as e:
+                target_agent = task.assignee_agent_id or "unknown"
                 error = AHPError(
                     message=f"Failed to dispatch task: {str(e)}",
                     code=AHPErrorCode.TIMEOUT,
-                    agent_id=task.assignee_agent_id,
+                    agent_id=target_agent,
                     task_id=task.task_id,
                 )
                 logger.error(f"AHP Error: {error.message}")
-                # Move to DLQ
-                self.mq.to_dlq(
-                    task.assignee_agent_id,
-                    msg=None,  # Message creation failed
-                    error=str(e),
-                )
 
     def _collect_results(
         self, tasks: List[OutfitTask], timeout: int = 60
@@ -287,7 +283,7 @@ Only return JSON, no other content.
         """Collect results from all agents with ACK handling"""
         results = {}
         start = time.time()
-        received = set()
+        received: set[str] = set()
         pending_tasks = {t.assignee_agent_id: t for t in tasks}
 
         while len(received) < len(tasks) and (time.time() - start) < timeout:
@@ -302,7 +298,6 @@ Only return JSON, no other content.
 
             # Handle ACK messages
             if msg.method == AHPMethod.ACK:
-                original_msg_id = msg.payload.get("original_message_id", "")
                 ack_status = msg.payload.get("ack_status", "")
                 logger.debug(f"Received ACK from {sender_id}: {ack_status}")
                 continue
@@ -344,7 +339,7 @@ Only return JSON, no other content.
             logger.warning(f"Missing results from agents: {missing}")
             # Check DLQ for failed messages
             dlq = self.mq.get_dlq()
-            if dlq:
+            if dlq and isinstance(dlq, dict):
                 logger.error(
                     f"DLQ contains {sum(len(v) for v in dlq.values())} failed messages"
                 )
@@ -392,7 +387,7 @@ Return JSON format:
                     overall_style=data.get("overall_style", ""),
                     summary=data.get("summary", ""),
                 )
-        except:
+        except (ValueError, json.JSONDecodeError):
             pass
 
         return OutfitResult(
@@ -503,7 +498,7 @@ Please return JSON in the following format:
         gender = "male"
         age = 25
         occupation = ""
-        hobbies = []
+        hobbies: list[str] = []
         mood = "normal"
         season = "spring"
         occasion = "daily"
@@ -605,14 +600,17 @@ Please return JSON in the following format:
         self, tasks: List[OutfitTask], timeout: int = 60
     ) -> Dict[str, OutfitRecommendation]:
         """Collect results from all agents (async)"""
-        results = {}
+        results: Dict[str, OutfitRecommendation] = {}
         start = time.time()
-        received = set()
+        received: set[str] = set()
         pending_tasks = {t.assignee_agent_id: t for t in tasks}
 
         while len(received) < len(tasks) and (time.time() - start) < timeout:
             # Receive any message, not specific to any agent
-            msg = await self.mq.receive("leader", timeout=2)
+            mq = self.mq
+            if mq is None:
+                break
+            msg = await mq.receive("leader", timeout=2)
 
             if msg is None:
                 continue

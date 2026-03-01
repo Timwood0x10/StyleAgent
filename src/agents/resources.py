@@ -43,7 +43,7 @@ class BaseTool:
 class FashionSearchTool(BaseTool):
     """Fashion search tool using LLM"""
 
-    def __init__(self, llm: LocalLLM = None):
+    def __init__(self, llm: Optional[LocalLLM] = None):
         super().__init__("fashion_search", "Search fashion information")
         self.llm = llm
 
@@ -53,10 +53,10 @@ class FashionSearchTool(BaseTool):
             prompt = f"""Based on the following user context, provide fashion recommendations:
 
 User Query: {query}
-User Mood: {kwargs.get('mood', 'normal')}
-User Occupation: {kwargs.get('occupation', 'general')}
-Season: {kwargs.get('season', 'spring')}
-User Age: {kwargs.get('age', 25)}
+User Mood: {kwargs.get("mood", "normal")}
+User Occupation: {kwargs.get("occupation", "general")}
+Season: {kwargs.get("season", "spring")}
+User Age: {kwargs.get("age", 25)}
 
 Please provide recommendations in JSON format:
 {{
@@ -67,12 +67,13 @@ Please provide recommendations in JSON format:
             response = self.llm.invoke(prompt)
             try:
                 import json
+
                 start = response.find("{")
                 end = response.rfind("}") + 1
                 if start >= 0 and end > start:
                     data = json.loads(response[start:end])
                     return data
-            except:
+            except (json.JSONDecodeError, ValueError):
                 pass
 
         # Fallback to database
@@ -106,9 +107,13 @@ Please provide recommendations in JSON format:
         if "mood" in kwargs:
             results["colors"] = database["colors_for_mood"].get(kwargs["mood"], [])
         if "occupation" in kwargs:
-            results["style_tips"] = database["styles_for_occupation"].get(kwargs["occupation"], [])
+            results["style_tips"] = database["styles_for_occupation"].get(
+                kwargs["occupation"], []
+            )
         if "season" in kwargs:
-            results["season_colors"] = database["colors_season"].get(kwargs["season"], [])
+            results["season_colors"] = database["colors_season"].get(
+                kwargs["season"], []
+            )
 
         return results
 
@@ -116,7 +121,7 @@ Please provide recommendations in JSON format:
 class WeatherCheckTool(BaseTool):
     """Weather check tool using LLM"""
 
-    def __init__(self, llm: LocalLLM = None):
+    def __init__(self, llm: Optional[LocalLLM] = None):
         super().__init__("weather_check", "Check weather information")
         self.llm = llm
 
@@ -139,13 +144,14 @@ Provide in JSON format:
             response = self.llm.invoke(prompt)
             try:
                 import json
+
                 start = response.find("{")
                 end = response.rfind("}") + 1
                 if start >= 0 and end > start:
                     data = json.loads(response[start:end])
                     data["suggestion"] = data.get("clothing_suggestion", "")
                     return data
-            except:
+            except (json.JSONDecodeError, ValueError):
                 pass
 
         # Fallback
@@ -153,7 +159,7 @@ Provide in JSON format:
             "spring": "15-25°C",
             "summer": "25-35°C",
             "autumn": "10-20°C",
-            "winter": "-5-10°C"
+            "winter": "-5-10°C",
         }
         return {
             "location": location,
@@ -167,7 +173,7 @@ Provide in JSON format:
 class StyleRecommendTool(BaseTool):
     """Style recommendation tool using LLM"""
 
-    def __init__(self, llm: LocalLLM = None):
+    def __init__(self, llm: Optional[LocalLLM] = None):
         super().__init__("style_recommend", "Recommend fashion style")
         self.llm = llm
 
@@ -194,12 +200,13 @@ Provide in JSON format:
             response = self.llm.invoke(prompt)
             try:
                 import json
+
                 start = response.find("{")
                 end = response.rfind("}") + 1
                 if start >= 0 and end > start:
                     data = json.loads(response[start:end])
                     return data
-            except:
+            except (json.JSONDecodeError, ValueError):
                 pass
 
         # Fallback
@@ -246,7 +253,7 @@ class FashionDatabase(BaseDataSource):
             },
         }
 
-    def query(self, key: str = None, **kwargs) -> Any:
+    def query(self, key: Optional[str] = None, **kwargs) -> Any:
         if key:
             return self._data.get(key)
         return self._data
@@ -259,7 +266,7 @@ class UserHistoryDB(BaseDataSource):
         super().__init__("user_history")
         self._history: Dict[str, List[Dict]] = {}
 
-    def query(self, session_id: str = None, **kwargs) -> List[Dict]:
+    def query(self, session_id: Optional[str] = None, **kwargs) -> List[Dict]:
         if session_id:
             return self._history.get(session_id, [])
         return []
@@ -374,7 +381,9 @@ class AgentResourceFactory:
     """Agent resource factory"""
 
     @staticmethod
-    def create_for_category(category: str, storage=None, llm: LocalLLM = None) -> AgentResources:
+    def create_for_category(
+        category: str, storage=None, llm: Optional[LocalLLM] = None
+    ) -> AgentResources:
         """Create resources for specific category"""
         resources = AgentResources(agent_id=f"agent_{category}")
 
@@ -382,7 +391,7 @@ class AgentResourceFactory:
         fashion_tool = FashionSearchTool(llm)
         weather_tool = WeatherCheckTool(llm)
         style_tool = StyleRecommendTool(llm)
-        
+
         resources.add_tool(fashion_tool)
         resources.add_tool(weather_tool)
         resources.add_tool(style_tool)

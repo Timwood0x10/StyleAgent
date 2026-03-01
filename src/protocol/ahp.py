@@ -19,7 +19,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
 from ..utils import get_logger
 
 # Logger for this module
@@ -202,7 +202,7 @@ class MessageQueue:
             self._dlq[agent_id].append(dlq_entry)
             logger.error(f"Message {message.message_id} moved to DLQ: {error}")
 
-    def get_dlq(self, agent_id: str = None) -> Dict[str, list]:
+    def get_dlq(self, agent_id: Optional[str] = None) -> Union[Dict[str, list], list]:
         """Get messages from Dead Letter Queue"""
         with self._lock:
             if agent_id:
@@ -603,7 +603,7 @@ class AsyncMessageQueue:
             self._dlq[agent_id].append(dlq_entry)
             logger.error(f"Message {message.message_id} moved to DLQ: {error}")
 
-    async def get_dlq(self, agent_id: str = None) -> Dict[str, list]:
+    async def get_dlq(self, agent_id: Optional[str] = None) -> Union[Dict[str, list], list]:
         """Get messages from Dead Letter Queue (async)"""
         async with self._lock:
             if agent_id:

@@ -1,0 +1,11 @@
+[lint]
+select = ["E", "F", "W"]
+ignore = ["E501", "F401", "F402", "F541", "F841", "E722", "W293", "W291"]
+
+[lint.per-file-ignores]
+"examples/*" = ["F401", "F841", "E722"]
+"src/storage/*" = ["W293", "W291"]
+
+[format]
+quote-style = "double"
+indent-style = "space"

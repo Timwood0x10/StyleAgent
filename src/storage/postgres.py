@@ -396,7 +396,7 @@ class StorageLayer:
     ):
         """Update task"""
         sql = "UPDATE tasks SET "
-        params = []
+        params: List[Any] = []
 
         if status:
             sql += "status = %s, "

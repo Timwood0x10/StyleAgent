@@ -142,12 +142,6 @@ class OutfitSubAgent:
             logger.info(f"[{self.agent_id}] task completed")
 
         except Exception as e:
-            error = AHPError(
-                message=f"Task execution failed: {str(e)}",
-                code=AHPErrorCode.UNKNOWN,
-                agent_id=self.agent_id,
-                task_id=task_id,
-            )
             self.sender.send_result(
                 "leader", task_id, session_id, {"error": str(e)}, status="failed"
             )
@@ -160,7 +154,7 @@ class OutfitSubAgent:
 
         # Use tools to get additional context
         from .resources import AgentResourceFactory
-        
+
         resources = AgentResourceFactory.create_for_category(
             self.category, llm=self.llm
         )
@@ -171,7 +165,7 @@ class OutfitSubAgent:
             mood=user_profile.mood,
             occupation=user_profile.occupation,
             season=user_profile.season,
-            age=user_profile.age
+            age=user_profile.age,
         )
 
         # Get weather info
@@ -179,7 +173,7 @@ class OutfitSubAgent:
             "weather_check",
             location="Beijing",
             season=user_profile.season,
-            mood=user_profile.mood
+            mood=user_profile.mood,
         )
 
         # Get style recommendations
@@ -189,17 +183,24 @@ class OutfitSubAgent:
             age=user_profile.age,
             occupation=user_profile.occupation,
             mood=user_profile.mood,
-            budget=user_profile.budget
+            budget=user_profile.budget,
         )
 
         # Build enhanced prompt with tool results
-        prompt = self._build_prompt(user_profile, fashion_info, weather_info, style_info)
+        prompt = self._build_prompt(
+            user_profile, fashion_info, weather_info, style_info
+        )
         response = self.llm.invoke(prompt, self.system_prompt)
 
         return self._parse_response(response)
 
-    def _build_prompt(self, user_profile: UserProfile, fashion_info: dict = None, 
-                      weather_info: dict = None, style_info: dict = None) -> str:
+    def _build_prompt(
+        self,
+        user_profile: UserProfile,
+        fashion_info: dict = None,
+        weather_info: dict = None,
+        style_info: dict = None,
+    ) -> str:
         """Build prompt with tool results"""
 
         category_names = {
@@ -222,7 +223,7 @@ class OutfitSubAgent:
             colors = fashion_info.get("colors", [])
             style_tips = fashion_info.get("style_tips", [])
             season_colors = fashion_info.get("season_colors", [])
-            tool_context += f"\nFashion Database Suggestions:\n"
+            tool_context += "\nFashion Database Suggestions:\n"
             if colors:
                 tool_context += f"- Colors for mood: {', '.join(colors)}\n"
             if style_tips:
@@ -241,7 +242,9 @@ class OutfitSubAgent:
         if style_info:
             items = style_info.get("items", [])
             tips = style_info.get("tips", [])
-            tool_context += f"\nStyle Recommendations ({style_info.get('style', 'casual')}):\n"
+            tool_context += (
+                f"\nStyle Recommendations ({style_info.get('style', 'casual')}):\n"
+            )
             if items:
                 tool_context += f"- Recommended items: {', '.join(items[:4])}\n"
             if tips:
@@ -259,7 +262,7 @@ Requirements:
 1. Choose appropriate styles based on user's age ({user_profile.age}) and occupation ({user_profile.occupation})
 2. Consider season ({user_profile.season}) and occasion ({user_profile.occasion})
 3. Budget: {user_profile.budget}
-4. If user has hobbies: {', '.join(user_profile.hobbies)}, consider how these hobbies affect outfit choices
+4. If user has hobbies: {", ".join(user_profile.hobbies)}, consider how these hobbies affect outfit choices
 
 Please return JSON format:
 {{
@@ -483,7 +486,7 @@ class AsyncOutfitSubAgent:
             mood=user_profile.mood,
             occupation=user_profile.occupation,
             season=user_profile.season,
-            age=user_profile.age
+            age=user_profile.age,
         )
 
         # Get weather info
@@ -491,7 +494,7 @@ class AsyncOutfitSubAgent:
             "weather_check",
             location="Beijing",
             season=user_profile.season,
-            mood=user_profile.mood
+            mood=user_profile.mood,
         )
 
         # Get style recommendations
@@ -501,16 +504,23 @@ class AsyncOutfitSubAgent:
             age=user_profile.age,
             occupation=user_profile.occupation,
             mood=user_profile.mood,
-            budget=user_profile.budget
+            budget=user_profile.budget,
         )
 
         # Build enhanced prompt
-        prompt = self._build_prompt(user_profile, fashion_info, weather_info, style_info)
+        prompt = self._build_prompt(
+            user_profile, fashion_info, weather_info, style_info
+        )
         response = await self.llm.ainvoke(prompt, self.system_prompt)
         return self._parse_response(response)
 
-    def _build_prompt(self, user_profile: UserProfile, fashion_info: dict = None,
-                      weather_info: dict = None, style_info: dict = None) -> str:
+    def _build_prompt(
+        self,
+        user_profile: UserProfile,
+        fashion_info: dict = None,
+        weather_info: dict = None,
+        style_info: dict = None,
+    ) -> str:
         """Build prompt with tool results"""
         category_names = {
             "head": "head accessories (hats, glasses, necklaces, earrings, etc.)",
@@ -532,7 +542,7 @@ class AsyncOutfitSubAgent:
             colors = fashion_info.get("colors", [])
             style_tips = fashion_info.get("style_tips", [])
             season_colors = fashion_info.get("season_colors", [])
-            tool_context += f"\nFashion Database Suggestions:\n"
+            tool_context += "\nFashion Database Suggestions:\n"
             if colors:
                 tool_context += f"- Colors for mood: {', '.join(colors)}\n"
             if style_tips:
@@ -551,7 +561,9 @@ class AsyncOutfitSubAgent:
         if style_info:
             items = style_info.get("items", [])
             tips = style_info.get("tips", [])
-            tool_context += f"\nStyle Recommendations ({style_info.get('style', 'casual')}):\n"
+            tool_context += (
+                f"\nStyle Recommendations ({style_info.get('style', 'casual')}):\n"
+            )
             if items:
                 tool_context += f"- Recommended items: {', '.join(items[:4])}\n"
             if tips:
@@ -569,7 +581,7 @@ Requirements:
 1. Choose appropriate styles based on user's age ({user_profile.age}) and occupation ({user_profile.occupation})
 2. Consider season ({user_profile.season}) and occasion ({user_profile.occasion})
 3. Budget: {user_profile.budget}
-4. If user has hobbies: {', '.join(user_profile.hobbies)}, consider how these hobbies affect outfit choices
+4. If user has hobbies: {", ".join(user_profile.hobbies)}, consider how these hobbies affect outfit choices
 
 Please return JSON format:
 {{

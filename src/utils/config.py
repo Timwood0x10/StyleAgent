@@ -36,7 +36,7 @@ class Config:
                 Config._yaml_config = yaml.safe_load(f) or {}
         Config._loaded = True
 
-    def _get(self, key: str, default: Any = None, env_key: str = None) -> Any:
+    def _get(self, key: str, default: Any = None, env_key: Optional[str] = None) -> Any:
         """Get config value - yaml first, then .env, then default"""
         # Try .env first for sensitive data
         if env_key:
@@ -46,7 +46,7 @@ class Config:
 
         # Try yaml
         keys = key.split(".")
-        value = Config._yaml_config
+        value: Any = Config._yaml_config
         for k in keys:
             if isinstance(value, dict):
                 value = value.get(k)
