@@ -302,7 +302,10 @@ class AHPSender:
     """AHP Sender"""
 
     def __init__(
-        self, message_queue: MessageQueue, agent_id: str = "leader", token_controller: TokenController = None
+        self,
+        message_queue: MessageQueue,
+        agent_id: str = "leader",
+        token_controller: TokenController = None,
     ):
         self.mq = message_queue
         self.agent_id = agent_id
@@ -604,7 +607,9 @@ class AsyncMessageQueue:
             self._dlq[agent_id].append(dlq_entry)
             logger.error(f"Message {message.message_id} moved to DLQ: {error}")
 
-    async def get_dlq(self, agent_id: Optional[str] = None) -> Union[Dict[str, list], list]:
+    async def get_dlq(
+        self, agent_id: Optional[str] = None
+    ) -> Union[Dict[str, list], list]:
         """Get messages from Dead Letter Queue (async)"""
         async with self._lock:
             if agent_id:

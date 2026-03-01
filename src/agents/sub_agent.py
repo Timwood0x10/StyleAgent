@@ -85,10 +85,7 @@ class OutfitSubAgent:
         self.retry_handler = RetryHandler(retry_config)
 
         # Initialize circuit breaker for LLM calls
-        self.circuit_breaker = CircuitBreaker(
-            failure_threshold=5,
-            timeout=60
-        )
+        self.circuit_breaker = CircuitBreaker(failure_threshold=5, timeout=60)
 
     def _get_db(self) -> StorageLayer:
         """Lazy init database connection"""
@@ -185,32 +182,32 @@ class OutfitSubAgent:
     def _get_rag_context(self, user_profile: UserProfile, limit: int = 3) -> str:
         """
         Get RAG context from historical recommendations
-        
+
         Args:
             user_profile: User profile for generating query
             limit: Maximum number of similar recommendations to retrieve
-            
+
         Returns:
             Formatted historical recommendations context
         """
         try:
             # Generate query text from user profile
             query_text = self._build_rag_query(user_profile)
-            
+
             # Generate embedding
             embedding = self.llm.embed(query_text)
-            
+
             # Search similar recommendations in vector DB
             db = self._get_db()
             similar_results = db.search_similar(
                 embedding=embedding,
                 session_id=None,  # Search across all sessions
-                limit=limit
+                limit=limit,
             )
-            
+
             if not similar_results:
                 return ""
-            
+
             # Format historical recommendations as context
             context_parts = []
             for i, result in enumerate(similar_results, 1):
@@ -222,9 +219,9 @@ class OutfitSubAgent:
                         f"(mood: {metadata.get('mood', 'N/A')}, "
                         f"season: {metadata.get('season', 'N/A')})"
                     )
-            
+
             return "\n".join(context_parts)
-            
+
         except Exception as e:
             logger.warning(f"RAG context retrieval failed: {e}")
             return ""
@@ -239,35 +236,32 @@ class OutfitSubAgent:
         )
 
     def _llm_call_with_circuit_breaker(
-        self,
-        func_name: str,
-        func,
-        *args,
-        **kwargs
+        self, func_name: str, func, *args, **kwargs
     ) -> Any:
         """
         Execute LLM call with circuit breaker and retry
         """
         from typing import Callable
-        
+
         # Check circuit breaker
         if not self.circuit_breaker.can_execute():
-            logger.warning(f"Circuit breaker OPEN for {self.agent_id}:{func_name}, using fallback")
+            logger.warning(
+                f"Circuit breaker OPEN for {self.agent_id}:{func_name}, using fallback"
+            )
             return self._get_fallback_result(func_name)
 
         try:
             # Execute with retry
             result = self.retry_handler.execute_with_retry(
-                func,
-                task_id=f"{self.agent_id}_{func_name}",
-                *args,
-                **kwargs
+                func, f"{self.agent_id}_{func_name}", *args, **kwargs
             )
             self.circuit_breaker.record_success()
             return result
         except Exception as e:
             self.circuit_breaker.record_failure()
-            logger.error(f"Circuit breaker recorded failure for {self.agent_id}:{func_name}: {e}")
+            logger.error(
+                f"Circuit breaker recorded failure for {self.agent_id}:{func_name}: {e}"
+            )
             return self._get_fallback_result(func_name)
 
     def _get_fallback_result(self, func_name: str) -> Any:
@@ -276,17 +270,21 @@ class OutfitSubAgent:
         """
         if "recommend" in func_name:
             # Return default recommendation
-            return json.dumps({
-                "category": self.category,
-                "items": ["basic item"],
-                "colors": ["neutral color"],
-                "styles": ["casual"],
-                "reasons": ["default recommendation due to service unavailable"],
-                "price_range": "medium"
-            })
+            return json.dumps(
+                {
+                    "category": self.category,
+                    "items": ["basic item"],
+                    "colors": ["neutral color"],
+                    "styles": ["casual"],
+                    "reasons": ["default recommendation due to service unavailable"],
+                    "price_range": "medium",
+                }
+            )
         return None
 
-    def _recommend(self, user_profile: UserProfile, compact_instruction: str = "") -> OutfitRecommendation:
+    def _recommend(
+        self, user_profile: UserProfile, compact_instruction: str = ""
+    ) -> OutfitRecommendation:
         """Execute recommendation with tools and RAG"""
 
         # Use tools to get additional context
@@ -328,9 +326,14 @@ class OutfitSubAgent:
 
         # Build enhanced prompt with tool results, compact_instruction and RAG context
         prompt = self._build_prompt(
-            user_profile, fashion_info, weather_info, style_info, compact_instruction, rag_context
+            user_profile,
+            fashion_info,
+            weather_info,
+            style_info,
+            compact_instruction,
+            rag_context,
         )
-        
+
         # Execute LLM call with circuit breaker
         response = self._llm_call_with_circuit_breaker(
             f"recommend_{self.category}",
@@ -634,7 +637,9 @@ class AsyncOutfitSubAgent:
             reasons=["Waiting"],
         )
 
-    async def _recommend(self, user_profile: UserProfile, compact_instruction: str = "") -> OutfitRecommendation:
+    async def _recommend(
+        self, user_profile: UserProfile, compact_instruction: str = ""
+    ) -> OutfitRecommendation:
         """Execute recommendation (async) with tools"""
         from .resources import AgentResourceFactory
 
@@ -733,7 +738,11 @@ class AsyncOutfitSubAgent:
                 tool_context += f"- Tips: {', '.join(tips)}\n"
 
         # Add compact instruction context if provided (token control)
-        compact_ctx = f"\nCompact Instruction: {compact_instruction}\n" if compact_instruction else ""
+        compact_ctx = (
+            f"\nCompact Instruction: {compact_instruction}\n"
+            if compact_instruction
+            else ""
+        )
 
         prompt = f"""{compact_ctx}User Info:
 {user_profile.to_prompt_context()}

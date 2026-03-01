@@ -183,7 +183,10 @@ class ResultValidator:
         self._custom_rules.append(rule)
 
     def validate(
-        self, result: Any, validator_name: str = "outfit", category: Optional[str] = None
+        self,
+        result: Any,
+        validator_name: str = "outfit",
+        category: Optional[str] = None,
     ) -> ValidationResult:
         """
         Validate result
@@ -237,7 +240,10 @@ class ResultValidator:
         return validation_results
 
     def auto_fix(
-        self, result: Any, validator_name: str = "outfit", category: Optional[str] = None
+        self,
+        result: Any,
+        validator_name: str = "outfit",
+        category: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Auto fix result"""
         if isinstance(result, str):

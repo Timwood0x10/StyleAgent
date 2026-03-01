@@ -25,8 +25,9 @@ from src.storage.postgres import StorageLayer
 
 class FeedbackType(Enum):
     """User feedback types"""
-    LIKE = "like"           # 喜欢推荐
-    DISLIKE = "dislike"     # 不喜欢
+
+    LIKE = "like"  # 喜欢推荐
+    DISLIKE = "dislike"  # 不喜欢
     TOO_EXPENSIVE = "too_expensive"  # 太贵
     TOO_CHEAP = "too_cheap"  # 太便宜
     TOO_FORMAL = "too_formal"  # 太正式
@@ -34,7 +35,7 @@ class FeedbackType(Enum):
     CHANGE_COLOR = "change_color"  # 换颜色
     CHANGE_STYLE = "change_style"  # 换风格
     CHANGE_ITEM = "change_item"  # 换单品
-    OTHER = "other"         # 其他
+    OTHER = "other"  # 其他
 
 
 class SessionManager:
@@ -59,11 +60,9 @@ class SessionManager:
 
     def add_to_history(self, role: str, content: str):
         """Add message to conversation history"""
-        self.conversation_history.append({
-            "role": role,
-            "content": content,
-            "timestamp": datetime.now().isoformat()
-        })
+        self.conversation_history.append(
+            {"role": role, "content": content, "timestamp": datetime.now().isoformat()}
+        )
 
     def get_context_summary(self) -> str:
         """Get summary of conversation context"""
@@ -143,13 +142,15 @@ class InteractiveDemo:
 
     def _get_mock_response(self) -> str:
         """Get mock LLM response for demo"""
-        return json.dumps({
-            "items": ["T-shirt", "Casual shirt"],
-            "colors": ["blue", "white"],
-            "styles": ["casual", "comfortable"],
-            "reasons": ["适合你的年龄和气质", "百搭易搭配"],
-            "price_range": "medium"
-        })
+        return json.dumps(
+            {
+                "items": ["T-shirt", "Casual shirt"],
+                "colors": ["blue", "white"],
+                "styles": ["casual", "comfortable"],
+                "reasons": ["适合你的年龄和气质", "百搭易搭配"],
+                "price_range": "medium",
+            }
+        )
 
     def cleanup(self):
         """Cleanup resources"""
@@ -163,16 +164,34 @@ class InteractiveDemo:
         user_input_lower = user_input.lower()
 
         # 正面反馈
-        positive_keywords = ["喜欢", "不错", "可以", "好", "满意", "yes", "good", "ok", "like"]
+        positive_keywords = [
+            "喜欢",
+            "不错",
+            "可以",
+            "好",
+            "满意",
+            "yes",
+            "good",
+            "ok",
+            "like",
+        ]
         if any(kw in user_input_lower for kw in positive_keywords):
             return {"type": FeedbackType.LIKE.value, "content": user_input}
 
         # 不喜欢
-        if "不喜欢" in user_input or "不要" in user_input or "dislike" in user_input_lower:
+        if (
+            "不喜欢" in user_input
+            or "不要" in user_input
+            or "dislike" in user_input_lower
+        ):
             return {"type": FeedbackType.DISLIKE.value, "content": user_input}
 
         # 太贵
-        if "太贵" in user_input or "贵了" in user_input or "expensive" in user_input_lower:
+        if (
+            "太贵" in user_input
+            or "贵了" in user_input
+            or "expensive" in user_input_lower
+        ):
             return {"type": FeedbackType.TOO_EXPENSIVE.value, "content": user_input}
 
         # 太便宜
@@ -201,7 +220,9 @@ class InteractiveDemo:
 
         return None
 
-    def build_refined_prompt(self, original_input: str, feedback: Dict[str, Any]) -> str:
+    def build_refined_prompt(
+        self, original_input: str, feedback: Dict[str, Any]
+    ) -> str:
         """Build refined prompt based on user feedback"""
         feedback_type = feedback["type"]
         content = feedback["content"]
@@ -262,24 +283,15 @@ class InteractiveDemo:
                 self.session_manager.add_to_history("user", user_input)
                 self.session_manager.add_to_history("assistant", "推荐完成")
 
-                return {
-                    "success": True,
-                    "result": result,
-                    "is_new": True
-                }
+                return {"success": True, "result": result, "is_new": True}
             else:
-                return {
-                    "success": False,
-                    "error": "No result returned"
-                }
+                return {"success": False, "error": "No result returned"}
 
         except Exception as e:
             import traceback
+
             traceback.print_exc()
-            return {
-                "success": False,
-                "error": str(e)
-            }
+            return {"success": False, "error": str(e)}
 
     def _build_context_prompt(self, user_input: str) -> str:
         """Build prompt with conversation context"""
@@ -347,26 +359,22 @@ class InteractiveDemo:
             if result:
                 # Update session
                 self.session_manager.last_recommendation = result
-                self.session_manager.add_to_history("user", f"反馈: {feedback['content']}")
+                self.session_manager.add_to_history(
+                    "user", f"反馈: {feedback['content']}"
+                )
                 self.session_manager.add_to_history("assistant", "根据反馈调整推荐")
 
                 return {
                     "success": True,
                     "result": result,
                     "is_new": False,
-                    "feedback_applied": feedback["type"]
+                    "feedback_applied": feedback["type"],
                 }
             else:
-                return {
-                    "success": False,
-                    "error": "Failed to process feedback"
-                }
+                return {"success": False, "error": "Failed to process feedback"}
 
         except Exception as e:
-            return {
-                "success": False,
-                "error": str(e)
-            }
+            return {"success": False, "error": str(e)}
 
     def display_result(self, result: dict):
         """Display recommendation result"""
@@ -446,7 +454,8 @@ class InteractiveDemo:
 
     def display_help(self):
         """Display help information"""
-        print("""
+        print(
+            """
 🧥 穿搭推荐系统 - 命令帮助
 ══════════════════════════════════════════════════════════
 
@@ -479,7 +488,8 @@ class InteractiveDemo:
    - "换颜色"                       (调整推荐)
 
 ══════════════════════════════════════════════════════════
-""")
+"""
+        )
 
     def display_history(self):
         """Display conversation history"""
@@ -575,6 +585,7 @@ class InteractiveDemo:
             except Exception as e:
                 print(f"\n❌ 错误: {e}")
                 import traceback
+
                 traceback.print_exc()
 
         self.cleanup()
@@ -586,9 +597,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="交互式穿搭推荐系统")
     parser.add_argument(
-        "--mock", "-m",
-        action="store_true",
-        help="使用 Mock LLM (不需要真实 LLM 服务)"
+        "--mock", "-m", action="store_true", help="使用 Mock LLM (不需要真实 LLM 服务)"
     )
     args = parser.parse_args()
 

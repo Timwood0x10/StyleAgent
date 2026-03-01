@@ -98,10 +98,10 @@ class LocalLLM:
     def embed(self, text: str) -> List[float]:
         """
         Generate embedding vector for text using local model or OpenAI
-        
+
         Args:
             text: Text to embed
-            
+
         Returns:
             List of floats representing the embedding vector
         """
@@ -115,13 +115,11 @@ class LocalLLM:
         """Generate embedding using OpenAI API"""
         try:
             import openai
+
             openai.api_key = os.getenv("OPENAI_API_KEY", self.api_key)
             openai.base_url = os.getenv("OPENAI_BASE_URL", self.embedding_url)
-            
-            resp = openai.embeddings.create(
-                model=self.embedding_model,
-                input=text
-            )
+
+            resp = openai.embeddings.create(model=self.embedding_model, input=text)
             return resp.data[0].embedding
         except Exception as e:
             # Fallback to local embedding
@@ -147,6 +145,7 @@ class LocalLLM:
     def _dummy_embedding(self, seed: int = 0) -> List[float]:
         """Generate a deterministic dummy embedding for fallback"""
         import math
+
         # Generate a simple hash-based pseudo-random vector
         vec = []
         for i in range(self.embedding_dim):
@@ -182,6 +181,7 @@ class MockLLM:
     def embed(self, text: str) -> List[float]:
         """Mock embed - return dummy vector"""
         import math
+
         # Return consistent dummy vector based on text length
         dim = 1536
         vec = []

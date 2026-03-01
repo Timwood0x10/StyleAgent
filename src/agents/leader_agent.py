@@ -13,10 +13,9 @@ from ..core.models import (
     OutfitTask,
     OutfitRecommendation,
     OutfitResult,
-    TaskStatus,
 )
 from ..core.validator import ResultValidator, ValidationLevel
-from ..core.registry import TaskRegistry, get_task_registry
+from ..core.registry import TaskRegistry, get_task_registry, TaskStatus
 from ..core.errors import RetryHandler, RetryConfig, ErrorType, CircuitBreaker
 from ..utils.llm import LocalLLM
 from ..utils import get_logger
@@ -69,10 +68,12 @@ class LeaderAgent:
         # Initialize circuit breaker for LLM calls
         self.circuit_breaker = CircuitBreaker(
             failure_threshold=5,  # Open after 5 consecutive failures
-            timeout=60  # Try again after 60 seconds
+            timeout=60,  # Try again after 60 seconds
         )
 
-    def _execute_with_timeout(self, func: Callable, timeout: int = 30, *args, **kwargs) -> Any:
+    def _execute_with_timeout(
+        self, func: Callable, timeout: int = 30, *args, **kwargs
+    ) -> Any:
         """Execute function with timeout (cross-platform)"""
         import threading
 
@@ -99,11 +100,7 @@ class LeaderAgent:
         return result[0] if result else None
 
     def _llm_call_with_circuit_breaker(
-        self,
-        func_name: str,
-        func: Callable,
-        *args,
-        **kwargs
+        self, func_name: str, func: Callable, *args, **kwargs
     ) -> Any:
         """
         Execute LLM call with circuit breaker and retry
@@ -116,10 +113,7 @@ class LeaderAgent:
         try:
             # Execute with retry
             result = self.retry_handler.execute_with_retry(
-                func,
-                task_id=f"leader_{func_name}",
-                *args,
-                **kwargs
+                func, f"leader_{func_name}", *args, **kwargs
             )
             self.circuit_breaker.record_success()
             return result
@@ -150,10 +144,12 @@ class LeaderAgent:
             return None
         return None
 
-    def _enrich_user_context(self, profile: UserProfile, user_input: str) -> UserProfile:
+    def _enrich_user_context(
+        self, profile: UserProfile, user_input: str
+    ) -> UserProfile:
         """
         Enrich user profile with context from previous sessions
-        
+
         Loads user history to provide:
         - previous_recommendations: Items user liked before
         - preferred_colors: Colors user prefers
@@ -164,38 +160,44 @@ class LeaderAgent:
             if profile.name and profile.name != "User":
                 # Search for similar users or previous sessions
                 # For now, we'll use RAG to find relevant history
-                query = f"user {profile.name} {profile.gender.value} {profile.occupation}"
+                query = (
+                    f"user {profile.name} {profile.gender.value} {profile.occupation}"
+                )
                 try:
                     embedding = self.llm.embed(query)
                     similar = self._db.db.search_similar(embedding, limit=3)
-                    
+
                     if similar:
                         # Extract context from similar sessions
                         for row in similar:
                             content = row.get("content", "")
                             metadata = row.get("metadata", {})
-                            
+
                             # Load preferred colors
                             if metadata.get("preferred_colors"):
                                 profile.preferred_colors = metadata["preferred_colors"]
-                            
+
                             # Load rejected items
                             if metadata.get("rejected_items"):
-                                profile.rejected_items = metadata.get("rejected_items", [])
-                            
-                            logger.info(f"Loaded context from session {row.get('session_id', 'unknown')}")
+                                profile.rejected_items = metadata.get(
+                                    "rejected_items", []
+                                )
+
+                            logger.info(
+                                f"Loaded context from session {row.get('session_id', 'unknown')}"
+                            )
                 except Exception as e:
                     logger.debug(f"Could not load user context: {e}")
-                    
+
         except Exception as e:
             logger.warning(f"Failed to enrich user context: {e}")
-        
+
         return profile
 
     def _analyze_required_categories(self, user_profile: UserProfile) -> List[str]:
         """
         Analyze user profile to determine which categories to recommend
-        
+
         Uses LLM to intelligently decide based on:
         - User's occasion (daily/work/date/party)
         - User's budget
@@ -244,10 +246,10 @@ Return ONLY JSON array like ["head", "top"], no other text.
                 prompt=prompt,
                 system_prompt="You are a fashion expert. Analyze user needs and return appropriate categories.",
             )
-            
+
             if not response:
                 return []
-            
+
             # Parse response
             start = response.find("[")
             end = response.rfind("]") + 1
@@ -259,10 +261,10 @@ Return ONLY JSON array like ["head", "top"], no other text.
                 if categories:
                     logger.info(f"LLM determined categories: {categories}")
                     return categories
-            
+
         except Exception as e:
             logger.warning(f"Failed to analyze categories with LLM: {e}")
-        
+
         return []  # Will fallback to default
 
     def process(self, user_input: str) -> OutfitResult:
@@ -276,7 +278,7 @@ Return ONLY JSON array like ["head", "top"], no other text.
         # 1. Parse user profile
         logger.info("Parsing user profile")
         profile = self.parse_user_profile(user_input)
-        
+
         # 1.5. Load user context from previous sessions (context awareness)
         logger.info("Loading user context from history")
         profile = self._enrich_user_context(profile, user_input)
@@ -420,14 +422,14 @@ Only return JSON, no other content.
     def create_tasks(self, user_profile: UserProfile) -> List[OutfitTask]:
         """
         Create outfit tasks with intelligent decomposition
-        
+
         Uses LLM to analyze user needs and determine which categories to recommend.
         Falls back to default 4 categories if LLM fails.
         """
 
         # Try intelligent task decomposition with LLM
         categories = self._analyze_required_categories(user_profile)
-        
+
         # If LLM fails, use default categories
         if not categories:
             categories = ["head", "top", "bottom", "shoes"]
@@ -449,25 +451,27 @@ Only return JSON, no other content.
         }
 
         for cat in categories:
-            task_configs.append({
-                "category": cat,
-                "agent_id": category_agent_map.get(cat, f"agent_{cat}"),
-                "desc": category_desc_map.get(cat, f"{cat} recommendation"),
-            })
+            task_configs.append(
+                {
+                    "category": cat,
+                    "agent_id": category_agent_map.get(cat, f"agent_{cat}"),
+                    "desc": category_desc_map.get(cat, f"{cat} recommendation"),
+                }
+            )
 
         tasks = []
         for config in task_configs:
             task = OutfitTask(category=config["category"], user_profile=user_profile)
             task.assignee_agent_id = config["agent_id"]
-            
+
             # Register task to TaskRegistry
             self.registry.register_task(
                 session_id=self.session_id,
                 title=f"{config['category']} recommendation",
-                description=config['desc'],
-                category=config['category'],
+                description=config["desc"],
+                category=config["category"],
             )
-            
+
             tasks.append(task)
             logger.debug(f"Created task: {config['category']} -> {config['agent_id']}")
 
@@ -578,16 +582,14 @@ Only return JSON, no other content.
                     price_range=result_data.get("price_range", ""),
                 )
                 received.add(sender_id)
-                
+
                 # Update task status in registry
                 task_id = msg.task_id
                 if task_id:
                     self.registry.update_status(
-                        task_id, 
-                        TaskStatus.COMPLETED, 
-                        result=result_data
+                        task_id, TaskStatus.COMPLETED, result=result_data
                     )
-                
+
                 logger.info(f"Received result from {category} (agent: {sender_id})")
 
             # Handle PROGRESS messages - track progress but don't count as received
@@ -595,7 +597,9 @@ Only return JSON, no other content.
                 progress = msg.payload.get("progress", 0)
                 progress_msg = msg.payload.get("message", "")
                 agent_progress[sender_id] = progress
-                logger.info(f"Progress from {sender_id}: {progress*100:.0f}% - {progress_msg}")
+                logger.info(
+                    f"Progress from {sender_id}: {progress*100:.0f}% - {progress_msg}"
+                )
 
         # Check for missing results and log warnings
         missing = set(pending_tasks.keys()) - received
@@ -611,13 +615,11 @@ Only return JSON, no other content.
         return results
 
     def _save_for_rag(
-        self, 
-        user_profile: UserProfile, 
-        results: Dict[str, OutfitRecommendation]
+        self, user_profile: UserProfile, results: Dict[str, OutfitRecommendation]
     ):
         """
         Save recommendations to vector DB for RAG
-        
+
         Args:
             user_profile: User profile
             results: Dictionary of category -> OutfitRecommendation
@@ -632,10 +634,10 @@ Only return JSON, no other content.
                     f"Styles: {', '.join(rec.styles)}, "
                     f"Reasons: {', '.join(rec.reasons)}"
                 )
-                
+
                 # Generate embedding
                 embedding = self.llm.embed(content)
-                
+
                 # Save to vector DB
                 metadata = {
                     "mood": user_profile.mood,
@@ -645,15 +647,17 @@ Only return JSON, no other content.
                     "gender": user_profile.gender.value,
                     "occasion": user_profile.occasion,
                 }
-                
+
                 self._db.save_vector(
                     session_id=self.session_id,
                     content=content,
                     embedding=embedding,
                     metadata=metadata,
                 )
-                logger.debug(f"Saved vector for {category} in session {self.session_id}")
-                
+                logger.debug(
+                    f"Saved vector for {category} in session {self.session_id}"
+                )
+
         except Exception as e:
             logger.warning(f"Failed to save vectors for RAG: {e}")
 
@@ -681,9 +685,15 @@ Only return JSON, no other content.
                 )
                 # Use auto-fixed result if available
                 if validation.corrected:
-                    recommendation.items = validation.corrected.get("items", recommendation.items)
-                    recommendation.colors = validation.corrected.get("colors", recommendation.colors)
-                    recommendation.styles = validation.corrected.get("styles", recommendation.styles)
+                    recommendation.items = validation.corrected.get(
+                        "items", recommendation.items
+                    )
+                    recommendation.colors = validation.corrected.get(
+                        "colors", recommendation.colors
+                    )
+                    recommendation.styles = validation.corrected.get(
+                        "styles", recommendation.styles
+                    )
             validated_results[category] = recommendation
 
         style_prompt = f"""Based on the following user profile and outfit recommendations, provide overall style suggestions:
@@ -775,10 +785,7 @@ class AsyncLeaderAgent:
         self.retry_handler = RetryHandler(retry_config)
 
         # Initialize circuit breaker for LLM calls
-        self.circuit_breaker = CircuitBreaker(
-            failure_threshold=5,
-            timeout=60
-        )
+        self.circuit_breaker = CircuitBreaker(failure_threshold=5, timeout=60)
 
     async def _init_mq(self):
         """Initialize async message queue"""
@@ -789,11 +796,7 @@ class AsyncLeaderAgent:
             self.sender = AsyncAHPSender(self.mq)
 
     async def _llm_call_with_circuit_breaker(
-        self,
-        func_name: str,
-        func,
-        *args,
-        **kwargs
+        self, func_name: str, func, *args, **kwargs
     ) -> Any:
         """Execute LLM call with circuit breaker and retry (async version)"""
         from typing import Callable
@@ -806,10 +809,7 @@ class AsyncLeaderAgent:
         try:
             # Execute with retry (sync version for simplicity)
             result = self.retry_handler.execute_with_retry(
-                func,
-                task_id=f"async_leader_{func_name}",
-                *args,
-                **kwargs
+                func, f"async_leader_{func_name}", *args, **kwargs
             )
             self.circuit_breaker.record_success()
             return result
@@ -836,53 +836,12 @@ class AsyncLeaderAgent:
             return None
         return None
 
-    async def _analyze_required_categories(self, user_profile: UserProfile) -> List[str]:
-        """Analyze user profile to determine which categories to recommend (async)"""
-
-        prompt = f"""Based on the following user profile, determine which clothing categories to recommend.
-
-User Profile:
-- Name: {user_profile.name}
-- Gender: {user_profile.gender.value}
-- Age: {user_profile.age}
-- Occupation: {user_profile.occupation}
-- Mood: {user_profile.mood}
-- Budget: {user_profile.budget}
-- Season: {user_profile.season}
-- Occasion: {user_profile.occasion}
-
-Available categories: head, top, bottom, shoes
-
-Return ONLY JSON array like ["head", "top"], no other text.
-"""
-
-        try:
-            response = await self.llm.ainvoke(prompt, SYSTEM_PROMPT)
-            if not response:
-                return []
-            
-            start = response.find("[")
-            end = response.rfind("]") + 1
-            if start >= 0 and end > start:
-                categories = json.loads(response[start:end])
-                valid_categories = {"head", "top", "bottom", "shoes"}
-                categories = [c for c in categories if c in valid_categories]
-                if categories:
-                    logger.info(f"LLM determined categories: {categories}")
-                    return categories
-        except Exception as e:
-            logger.warning(f"Failed to analyze categories with LLM: {e}")
-        
-        return []
-
     def _save_for_rag(
-        self, 
-        user_profile: UserProfile, 
-        results: Dict[str, OutfitRecommendation]
+        self, user_profile: UserProfile, results: Dict[str, OutfitRecommendation]
     ):
         """
         Save recommendations to vector DB for RAG (sync version for async agent)
-        
+
         Args:
             user_profile: User profile
             results: Dictionary of category -> OutfitRecommendation
@@ -897,10 +856,10 @@ Return ONLY JSON array like ["head", "top"], no other text.
                     f"Styles: {', '.join(rec.styles)}, "
                     f"Reasons: {', '.join(rec.reasons)}"
                 )
-                
+
                 # Generate embedding
                 embedding = self.llm.embed(content)
-                
+
                 # Save to vector DB
                 metadata = {
                     "mood": user_profile.mood,
@@ -910,15 +869,17 @@ Return ONLY JSON array like ["head", "top"], no other text.
                     "gender": user_profile.gender.value,
                     "occasion": user_profile.occasion,
                 }
-                
+
                 self._db.save_vector(
                     session_id=self.session_id,
                     content=content,
                     embedding=embedding,
                     metadata=metadata,
                 )
-                logger.debug(f"Saved vector for {category} in session {self.session_id}")
-                
+                logger.debug(
+                    f"Saved vector for {category} in session {self.session_id}"
+                )
+
         except Exception as e:
             logger.warning(f"Failed to save vectors for RAG: {e}")
 
@@ -936,7 +897,7 @@ Return ONLY JSON array like ["head", "top"], no other text.
 
         # 2. Create tasks
         logger.info("Creating outfit tasks")
-        tasks = self.create_tasks(profile)
+        tasks = await self.create_tasks(profile)
 
         # 3. Dispatch tasks via AHP
         logger.info("Dispatching tasks via async AHP protocol")
@@ -1034,12 +995,53 @@ Please return JSON in the following format:
             occasion=occasion,
         )
 
-    def create_tasks(self, user_profile: UserProfile) -> List[OutfitTask]:
+    async def _analyze_required_categories(
+        self, user_profile: UserProfile
+    ) -> List[str]:
+        """Analyze user profile to determine which categories to recommend (async)"""
+
+        prompt = f"""Based on the following user profile, determine which clothing categories to recommend.
+
+User Profile:
+- Name: {user_profile.name}
+- Gender: {user_profile.gender.value}
+- Age: {user_profile.age}
+- Occupation: {user_profile.occupation}
+- Mood: {user_profile.mood}
+- Budget: {user_profile.budget}
+- Season: {user_profile.season}
+- Occasion: {user_profile.occasion}
+
+Available categories: head, top, bottom, shoes
+
+Return ONLY JSON array like ["head", "top"], no other text.
+"""
+
+        try:
+            response = await self.llm.ainvoke(prompt, SYSTEM_PROMPT)
+            if not response:
+                return []
+
+            start = response.find("[")
+            end = response.rfind("]") + 1
+            if start >= 0 and end > start:
+                categories = json.loads(response[start:end])
+                valid_categories = {"head", "top", "bottom", "shoes"}
+                categories = [c for c in categories if c in valid_categories]
+                if categories:
+                    logger.info(f"LLM determined categories: {categories}")
+                    return categories
+        except Exception as e:
+            logger.warning(f"Failed to analyze categories with LLM: {e}")
+
+        return []
+
+    async def create_tasks(self, user_profile: UserProfile) -> List[OutfitTask]:
         """Create outfit tasks with intelligent decomposition"""
-        
+
         # Try intelligent task decomposition with LLM
-        categories = self._analyze_required_categories(user_profile)
-        
+        categories = await self._analyze_required_categories(user_profile)
+
         # If LLM fails, use default categories
         if not categories:
             categories = ["head", "top", "bottom", "shoes"]
@@ -1159,7 +1161,9 @@ Please return JSON in the following format:
                 progress = msg.payload.get("progress", 0)
                 progress_msg = msg.payload.get("message", "")
                 agent_progress[sender_id] = progress
-                logger.info(f"Progress from {sender_id}: {progress*100:.0f}% - {progress_msg}")
+                logger.info(
+                    f"Progress from {sender_id}: {progress*100:.0f}% - {progress_msg}"
+                )
 
         # Check for missing results
         missing = set(pending_tasks.keys()) - received
