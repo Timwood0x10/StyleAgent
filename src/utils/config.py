@@ -203,6 +203,16 @@ class Config:
         return self._get("environment", "development")
 
     # ==================== Agents ====================
+    @property
+    def SUB_AGENT_CATEGORIES(self) -> list:
+        """Sub agent categories"""
+        return self._get("agents.categories", ["head", "top", "bottom", "shoes"])
+
+    @property
+    def SUB_AGENT_PREFIX(self) -> str:
+        """Sub agent ID prefix"""
+        return self._get("agents.agent_prefix", "agent_")
+
     def get_agent_config(self, category: str) -> Dict[str, Any]:
         """Get agent configuration by category"""
         agents = self._yaml_config.get("agents", {})

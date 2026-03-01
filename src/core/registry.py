@@ -13,6 +13,9 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from ..storage import get_storage
+from ..utils import get_logger
+
+logger = get_logger(__name__)
 
 
 class TaskStatus(str, Enum):
@@ -114,7 +117,7 @@ class TaskRegistry:
         try:
             self.storage.save_task(task)
         except Exception as e:
-            print(f"WARNING: Task save failed: {e}")
+            logger.warning(f"Task save failed: {e}")
 
         return task_id
 
@@ -157,7 +160,7 @@ class TaskRegistry:
                     task_id, TaskStatus.IN_PROGRESS, agent_id
                 )
             except Exception as e:
-                print(f"WARNING: Status update failed: {e}")
+                logger.warning(f"Status update failed: {e}")
 
             return True
 
@@ -211,7 +214,7 @@ class TaskRegistry:
                     completed_at=task.completed_at,
                 )
             except Exception as e:
-                print(f"WARNING: Task update failed: {e}")
+                logger.warning(f"Task update failed: {e}")
 
             return True
 

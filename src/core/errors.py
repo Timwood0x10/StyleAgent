@@ -16,6 +16,10 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 
+from ..utils import get_logger
+
+logger = get_logger(__name__)
+
 
 class ErrorType(str, Enum):
     """Error types"""
@@ -166,10 +170,8 @@ class RetryHandler:
                 self.record_attempt(task_id)
                 delay = self.get_delay(task_id)
 
-                print(f"   WARNING: {error.error_type.value}: {error.message}")
-                print(
-                    f"   RETRY: {task_id} attempt {self._attempts[task_id]}/{self.config.max_retries}, waiting {delay:.1f}s"
-                )
+                logger.warning(f"{error.error_type.value}: {error.message}")
+                logger.warning(f"Retry: {task_id} attempt {self._attempts[task_id]}/{self.config.max_retries}, waiting {delay:.1f}s")
 
                 time.sleep(delay)
                 last_error = e
@@ -198,7 +200,7 @@ class FallbackHandler:
         except Exception:
             fallback = self._fallbacks.get(fallback_name)
             if fallback:
-                print(f"   FALLBACK: using {fallback_name}")
+                logger.info(f"Fallback: using {fallback_name}")
                 return fallback(*args, **kwargs)
             raise
 
@@ -277,7 +279,7 @@ class CircuitBreaker:
 
             if self._failure_count >= self.failure_threshold:
                 self._state = "open"
-                print(f"   CIRCUIT OPEN: {self._failure_count} consecutive failures")
+                logger.warning(f"Circuit OPEN: {self._failure_count} consecutive failures")
 
     def can_execute(self) -> bool:
         """Check if execution allowed"""
