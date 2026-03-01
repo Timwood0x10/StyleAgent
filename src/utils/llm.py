@@ -44,7 +44,7 @@ class LocalLLM:
     def invoke(self, prompt: str, system_prompt: str = "") -> str:
         """Invoke model (sync)"""
         if not self.available:
-            return "Local model not connected"
+            raise ConnectionError("Local model not connected")
 
         messages = []
         if system_prompt:
@@ -66,7 +66,7 @@ class LocalLLM:
             data = resp.json()
             return data["message"]["content"]
         except Exception as e:
-            return f"Invocation failed: {e}"
+            raise RuntimeError(f"LLM invocation failed: {e}")
 
     async def ainvoke(self, prompt: str, system_prompt: str = "") -> str:
         """Invoke model (async) - using thread pool to avoid httpx issues"""

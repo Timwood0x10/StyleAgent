@@ -41,6 +41,7 @@ class Database:
 
     def execute(self, sql: str, params: tuple = None):
         """Execute SQL"""
+        cursor = None
         try:
             cursor = self.conn.cursor()
             cursor.execute(sql, params)
@@ -49,9 +50,13 @@ class Database:
         except Exception as e:
             logger.error(f"Database execute error: {e}")
             raise
+        finally:
+            if cursor:
+                cursor.close()
 
     def fetch_one(self, sql: str, params: tuple = None):
         """Fetch one row"""
+        cursor = None
         try:
             cursor = self.conn.cursor()
             cursor.execute(sql, params)
@@ -59,12 +64,23 @@ class Database:
         except Exception as e:
             logger.error(f"Database fetch_one error: {e}")
             raise
+        finally:
+            if cursor:
+                cursor.close()
 
     def fetch_all(self, sql: str, params: tuple = None):
         """Fetch all rows"""
-        cursor = self.conn.cursor()
-        cursor.execute(sql, params)
-        return cursor.fetchall()
+        cursor = None
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(sql, params)
+            return cursor.fetchall()
+        except Exception as e:
+            logger.error(f"Database fetch_all error: {e}")
+            raise
+        finally:
+            if cursor:
+                cursor.close()
 
     def close(self):
         """Close connection"""
@@ -154,6 +170,7 @@ class StorageLayer:
             summary TEXT,
             status VARCHAR(20) DEFAULT 'running',
             created_at TIMESTAMP DEFAULT NOW(),
+            updated_at TIMESTAMP DEFAULT NOW(),
             completed_at TIMESTAMP
         );
         
@@ -329,10 +346,11 @@ class StorageLayer:
                 {
                     "id": row[0],
                     "session_id": row[1],
-                    "content": row[2],
-                    "embedding": row[3],
-                    "metadata": row[4],
-                    "created_at": row[5],
+                    "agent_id": row[2],
+                    "content": row[3],
+                    "embedding": row[4],
+                    "metadata": row[5],
+                    "created_at": row[6],
                 }
             )
         return results
@@ -521,7 +539,8 @@ class StorageLayer:
                 updated_at = NOW()
         """
         cursor = self.db.execute(sql, (session_id, agent_id, json.dumps(context_data)))
-        return cursor.fetchone()[0] if cursor.fetchone() else 0
+        result = cursor.fetchone()
+        return result[0] if result else 0
 
     def get_agent_context(self, session_id: str, agent_id: str) -> Optional[Dict]:
         """Get agent context"""

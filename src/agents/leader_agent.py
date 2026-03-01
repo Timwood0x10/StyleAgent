@@ -15,6 +15,8 @@ from ..core.models import (
     OutfitResult,
     TaskStatus,
 )
+from ..core.validator import ResultValidator, ValidationLevel
+from ..core.registry import TaskRegistry, get_task_registry
 from ..utils.llm import LocalLLM
 from ..utils import get_logger
 from ..protocol import get_message_queue, AHPSender, AHPError, AHPErrorCode, AHPMethod
@@ -44,6 +46,8 @@ class LeaderAgent:
         self.mq = get_message_queue()
         self.sender = AHPSender(self.mq)
         self.session_id = ""
+        self.validator = ResultValidator(level=ValidationLevel.NORMAL)
+        self.registry = get_task_registry()
 
     def process(self, user_input: str) -> OutfitResult:
         """Process user input - full workflow"""
@@ -216,6 +220,15 @@ Only return JSON, no other content.
         for config in task_configs:
             task = OutfitTask(category=config["category"], user_profile=user_profile)
             task.assignee_agent_id = config["agent_id"]
+            
+            # Register task to TaskRegistry
+            self.registry.register_task(
+                session_id=self.session_id,
+                title=f"{config['category']} recommendation",
+                description=config['desc'],
+                category=config['category'],
+            )
+            
             tasks.append(task)
             logger.debug(f"Created task: {config['category']} -> {config['agent_id']}")
 
@@ -285,6 +298,7 @@ Only return JSON, no other content.
         start = time.time()
         received: set[str] = set()
         pending_tasks = {t.assignee_agent_id: t for t in tasks}
+        agent_progress: Dict[str, float] = {}  # Track progress per agent
 
         while len(received) < len(tasks) and (time.time() - start) < timeout:
             # Receive any message, not specific to any agent
@@ -325,13 +339,24 @@ Only return JSON, no other content.
                     price_range=result_data.get("price_range", ""),
                 )
                 received.add(sender_id)
-                logger.info(f"Received result from {category}")
+                
+                # Update task status in registry
+                task_id = msg.task_id
+                if task_id:
+                    self.registry.update_status(
+                        task_id, 
+                        TaskStatus.COMPLETED, 
+                        result=result_data
+                    )
+                
+                logger.info(f"Received result from {category} (agent: {sender_id})")
 
-            # Handle PROGRESS messages
+            # Handle PROGRESS messages - track progress but don't count as received
             elif msg.method == AHPMethod.PROGRESS:
                 progress = msg.payload.get("progress", 0)
                 progress_msg = msg.payload.get("message", "")
-                logger.debug(f"Progress from {sender_id}: {progress} - {progress_msg}")
+                agent_progress[sender_id] = progress
+                logger.info(f"Progress from {sender_id}: {progress*100:.0f}% - {progress_msg}")
 
         # Check for missing results and log warnings
         missing = set(pending_tasks.keys()) - received
@@ -349,7 +374,31 @@ Only return JSON, no other content.
     def aggregate_results(
         self, user_profile: UserProfile, results: Dict[str, OutfitRecommendation]
     ) -> OutfitResult:
-        """Aggregate results"""
+        """Aggregate results with validation"""
+
+        # Validate each result before aggregation
+        validated_results = {}
+        for category, recommendation in results.items():
+            result_dict = {
+                "category": recommendation.category,
+                "items": recommendation.items,
+                "colors": recommendation.colors,
+                "styles": recommendation.styles,
+                "reasons": recommendation.reasons,
+                "price_range": recommendation.price_range,
+            }
+            validation = self.validator.validate(result_dict, "outfit", category)
+            if not validation.is_valid:
+                logger.warning(
+                    f"Validation failed for {category}: "
+                    f"{[e.message for e in validation.errors]}"
+                )
+                # Use auto-fixed result if available
+                if validation.corrected:
+                    recommendation.items = validation.corrected.get("items", recommendation.items)
+                    recommendation.colors = validation.corrected.get("colors", recommendation.colors)
+                    recommendation.styles = validation.corrected.get("styles", recommendation.styles)
+            validated_results[category] = recommendation
 
         style_prompt = f"""Based on the following user profile and outfit recommendations, provide overall style suggestions:
 
@@ -357,7 +406,7 @@ User Profile:
 {user_profile.to_prompt_context()}
 
 Recommendations:
-{json.dumps({k: {"items": v.items, "colors": v.colors, "styles": v.styles} for k, v in results.items()}, ensure_ascii=False)}
+{json.dumps({k: {"items": v.items, "colors": v.colors, "styles": v.styles} for k, v in validated_results.items()}, ensure_ascii=False)}
 
 Please provide:
 1. Overall style description
@@ -380,10 +429,10 @@ Return JSON format:
                 return OutfitResult(
                     session_id=self.session_id,
                     user_profile=user_profile,
-                    head=results.get("head"),
-                    top=results.get("top"),
-                    bottom=results.get("bottom"),
-                    shoes=results.get("shoes"),
+                    head=validated_results.get("head"),
+                    top=validated_results.get("top"),
+                    bottom=validated_results.get("bottom"),
+                    shoes=validated_results.get("shoes"),
                     overall_style=data.get("overall_style", ""),
                     summary=data.get("summary", ""),
                 )
@@ -393,10 +442,10 @@ Return JSON format:
         return OutfitResult(
             session_id=self.session_id,
             user_profile=user_profile,
-            head=results.get("head"),
-            top=results.get("top"),
-            bottom=results.get("bottom"),
-            shoes=results.get("shoes"),
+            head=validated_results.get("head"),
+            top=validated_results.get("top"),
+            bottom=validated_results.get("bottom"),
+            shoes=validated_results.get("shoes"),
         )
 
 
@@ -604,6 +653,7 @@ Please return JSON in the following format:
         start = time.time()
         received: set[str] = set()
         pending_tasks = {t.assignee_agent_id: t for t in tasks}
+        agent_progress: Dict[str, float] = {}  # Track progress per agent
 
         while len(received) < len(tasks) and (time.time() - start) < timeout:
             # Receive any message, not specific to any agent
@@ -630,12 +680,14 @@ Please return JSON in the following format:
                     price_range=result_data.get("price_range", ""),
                 )
                 received.add(sender_id)
-                logger.info(f"Received result from {category}")
+                logger.info(f"Received result from {category} (agent: {sender_id})")
             elif msg.method == AHPMethod.ACK:
                 logger.debug(f"Received ACK from {sender_id}")
             elif msg.method == AHPMethod.PROGRESS:
                 progress = msg.payload.get("progress", 0)
-                logger.debug(f"Progress from {sender_id}: {progress}")
+                progress_msg = msg.payload.get("message", "")
+                agent_progress[sender_id] = progress
+                logger.info(f"Progress from {sender_id}: {progress*100:.0f}% - {progress_msg}")
 
         # Check for missing results
         missing = set(pending_tasks.keys()) - received

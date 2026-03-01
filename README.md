@@ -72,7 +72,7 @@ python examples/demo.py
 ## Project Structure
 
 ```
-multi-agent/
+StyleAgent/
 ├── src/
 │   ├── core/models.py       # Data models
 │   ├── agents/

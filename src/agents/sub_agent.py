@@ -62,7 +62,7 @@ class OutfitSubAgent:
         )
         self.mq = get_message_queue()
         self.receiver = AHPReceiver(agent_id, self.mq)
-        self.sender = AHPSender(self.mq)
+        self.sender = AHPSender(self.mq, self.agent_id)
         self._running = False
 
     def start(self):
@@ -119,7 +119,9 @@ class OutfitSubAgent:
             self.sender.send_progress(
                 "leader", task_id, session_id, 0.5, "Recommending..."
             )
-            result = self._recommend(profile)
+            # Get compact_instruction from payload (token control)
+            compact_instruction = payload.get("compact_instruction", "")
+            result = self._recommend(profile, compact_instruction)
 
             self.sender.send_progress("leader", task_id, session_id, 0.9, "Completed")
 
@@ -149,7 +151,7 @@ class OutfitSubAgent:
             self.mq.to_dlq(self.agent_id, msg, str(e))
             logger.error(f"[{self.agent_id}] task failed: {e}")
 
-    def _recommend(self, user_profile: UserProfile) -> OutfitRecommendation:
+    def _recommend(self, user_profile: UserProfile, compact_instruction: str = "") -> OutfitRecommendation:
         """Execute recommendation with tools"""
 
         # Use tools to get additional context
@@ -186,9 +188,9 @@ class OutfitSubAgent:
             budget=user_profile.budget,
         )
 
-        # Build enhanced prompt with tool results
+        # Build enhanced prompt with tool results and compact_instruction
         prompt = self._build_prompt(
-            user_profile, fashion_info, weather_info, style_info
+            user_profile, fashion_info, weather_info, style_info, compact_instruction
         )
         response = self.llm.invoke(prompt, self.system_prompt)
 
@@ -200,6 +202,7 @@ class OutfitSubAgent:
         fashion_info: dict = None,
         weather_info: dict = None,
         style_info: dict = None,
+        compact_instruction: str = "",
     ) -> str:
         """Build prompt with tool results"""
 
@@ -250,7 +253,13 @@ class OutfitSubAgent:
             if tips:
                 tool_context += f"- Tips: {', '.join(tips)}\n"
 
-        prompt = f"""User Info:
+        # Include compact instruction if provided
+        compact_section = ""
+        if compact_instruction:
+            compact_section = f"\n[Compact Instruction - follow this if available]:\n{compact_instruction}\n"
+
+        prompt = f"""{compact_section}
+User Info:
 {user_profile.to_prompt_context()}
 {tool_context}
 
@@ -415,7 +424,9 @@ class AsyncOutfitSubAgent:
             await self.sender.send_progress(
                 "leader", task_id, session_id, 0.5, "Recommending..."
             )
-            result = await self._recommend(profile)
+            # Get compact_instruction from payload (token control)
+            compact_instruction = payload.get("compact_instruction", "")
+            result = await self._recommend(profile, compact_instruction)
 
             await self.sender.send_progress(
                 "leader", task_id, session_id, 0.9, "Completed"
@@ -472,7 +483,7 @@ class AsyncOutfitSubAgent:
             reasons=["Waiting"],
         )
 
-    async def _recommend(self, user_profile: UserProfile) -> OutfitRecommendation:
+    async def _recommend(self, user_profile: UserProfile, compact_instruction: str = "") -> OutfitRecommendation:
         """Execute recommendation (async) with tools"""
         from .resources import AgentResourceFactory
 
@@ -507,9 +518,9 @@ class AsyncOutfitSubAgent:
             budget=user_profile.budget,
         )
 
-        # Build enhanced prompt
+        # Build enhanced prompt with compact_instruction
         prompt = self._build_prompt(
-            user_profile, fashion_info, weather_info, style_info
+            user_profile, fashion_info, weather_info, style_info, compact_instruction
         )
         response = await self.llm.ainvoke(prompt, self.system_prompt)
         return self._parse_response(response)
@@ -520,6 +531,7 @@ class AsyncOutfitSubAgent:
         fashion_info: dict = None,
         weather_info: dict = None,
         style_info: dict = None,
+        compact_instruction: str = "",
     ) -> str:
         """Build prompt with tool results"""
         category_names = {
@@ -569,7 +581,10 @@ class AsyncOutfitSubAgent:
             if tips:
                 tool_context += f"- Tips: {', '.join(tips)}\n"
 
-        prompt = f"""User Info:
+        # Add compact instruction context if provided (token control)
+        compact_ctx = f"\nCompact Instruction: {compact_instruction}\n" if compact_instruction else ""
+
+        prompt = f"""{compact_ctx}User Info:
 {user_profile.to_prompt_context()}
 {tool_context}
 
