@@ -11,6 +11,7 @@ Supported methods:
 - ACK: Message acknowledgment
 """
 
+import asyncio
 import queue
 import threading
 import time
@@ -524,3 +525,281 @@ def reset_message_queue():
     """Reset message queue"""
     global _global_mq
     _global_mq = None
+
+
+# ========== Async Version ==========
+
+
+class AsyncMessageQueue:
+    """Async Agent message queue with asyncio.Queue"""
+
+    def __init__(self, max_retries: int = 3, retry_delay: float = 1.0):
+        self._queues: Dict[str, asyncio.Queue] = {}
+        self._lock = asyncio.Lock()
+        self._heartbeats: Dict[str, datetime] = {}
+        self._message_ids: Dict[str, set] = {}
+        self._dlq: Dict[str, list] = {}
+        self._retry_count: Dict[str, int] = {}
+        self._max_retries = max_retries
+        self._retry_delay = retry_delay
+
+    async def get_queue(self, agent_id: str) -> asyncio.Queue:
+        """Get async queue for agent"""
+        async with self._lock:
+            if agent_id not in self._queues:
+                self._queues[agent_id] = asyncio.Queue()
+            return self._queues[agent_id]
+
+    async def send(self, agent_id: str, message: AHPMessage):
+        """Send message with deduplication (async)"""
+        async with self._lock:
+            if agent_id not in self._message_ids:
+                self._message_ids[agent_id] = set()
+
+            if message.message_id in self._message_ids[agent_id]:
+                logger.warning(f"Duplicate message detected: {message.message_id}")
+                return
+
+            self._message_ids[agent_id].add(message.message_id)
+
+        queue = await self.get_queue(agent_id)
+        await queue.put(message)
+
+    async def receive(self, agent_id: str, timeout: float = 30) -> Optional[AHPMessage]:
+        """Receive message (async)"""
+        queue = await self.get_queue(agent_id)
+        try:
+            return await asyncio.wait_for(queue.get(), timeout=timeout)
+        except asyncio.TimeoutError:
+            return None
+
+    async def broadcast(self, agent_ids: list, message: AHPMessage):
+        """Broadcast message (async)"""
+        for agent_id in agent_ids:
+            await self.send(agent_id, message)
+
+    async def update_heartbeat(self, agent_id: str):
+        """Update heartbeat (async)"""
+        async with self._lock:
+            self._heartbeats[agent_id] = datetime.now()
+
+    async def get_heartbeat(self, agent_id: str) -> Optional[datetime]:
+        """Get heartbeat time (async)"""
+        async with self._lock:
+            return self._heartbeats.get(agent_id)
+
+    async def to_dlq(self, agent_id: str, message: AHPMessage, error: str = ""):
+        """Move failed message to Dead Letter Queue (async)"""
+        async with self._lock:
+            if agent_id not in self._dlq:
+                self._dlq[agent_id] = []
+
+            dlq_entry = {
+                "message": message.to_dict(),
+                "error": error,
+                "timestamp": datetime.now().isoformat(),
+                "retry_count": self._retry_count.get(message.message_id, 0),
+            }
+            self._dlq[agent_id].append(dlq_entry)
+            logger.error(f"Message {message.message_id} moved to DLQ: {error}")
+
+    async def get_dlq(self, agent_id: str = None) -> Dict[str, list]:
+        """Get messages from Dead Letter Queue (async)"""
+        async with self._lock:
+            if agent_id:
+                return self._dlq.get(agent_id, [])
+            return dict(self._dlq)
+
+    async def should_retry(self, message_id: str) -> bool:
+        """Check if message should be retried (async)"""
+        retry_count = self._retry_count.get(message_id, 0)
+        return retry_count < self._max_retries
+
+    async def increment_retry(self, message_id: str) -> int:
+        """Increment retry count (async)"""
+        async with self._lock:
+            self._retry_count[message_id] = self._retry_count.get(message_id, 0) + 1
+            return self._retry_count[message_id]
+
+    async def is_alive(self, agent_id: str, timeout: float = 60) -> bool:
+        """Check if agent is alive (async)"""
+        last_heartbeat = await self.get_heartbeat(agent_id)
+        if not last_heartbeat:
+            return True
+        return (datetime.now() - last_heartbeat).seconds < timeout
+
+
+class AsyncAHPSender:
+    """Async AHP Sender"""
+
+    def __init__(
+        self, message_queue: AsyncMessageQueue, token_controller: "AsyncTokenController" = None
+    ):
+        self.mq = message_queue
+        self.token_controller = token_controller or AsyncTokenController()
+
+    async def send_task(
+        self,
+        target_agent: str,
+        task_id: str,
+        session_id: str,
+        payload: Dict[str, Any],
+        token_limit: int = 500,
+        context: str = "",
+    ) -> AHPMessage:
+        """Send task to agent (async)"""
+        compact_instruction = self.token_controller.create_compact_instruction(
+            user_profile=payload.get("user_info", {}),
+            task={
+                "category": payload.get("category"),
+                "instruction": payload.get("instruction"),
+            },
+            context=context,
+            max_tokens=token_limit,
+        )
+
+        payload["compact_instruction"] = compact_instruction
+
+        msg = AHPMessage(
+            method=AHPMethod.TASK,
+            agent_id="leader",
+            target_agent=target_agent,
+            task_id=task_id,
+            session_id=session_id,
+            payload=payload,
+            token_limit=token_limit,
+        )
+        await self.mq.send(target_agent, msg)
+        logger.debug(f"ASYNC SEND [->{target_agent}] TASK: {payload.get('category', 'unknown')}")
+        return msg
+
+    async def send_result(
+        self,
+        target_agent: str,
+        task_id: str,
+        session_id: str,
+        result: Dict[str, Any],
+        status: str = "success",
+    ) -> AHPMessage:
+        """Send result (async)"""
+        msg = AHPMessage(
+            method=AHPMethod.RESULT,
+            agent_id="leader",
+            target_agent=target_agent,
+            task_id=task_id,
+            session_id=session_id,
+            payload={"result": result, "status": status},
+        )
+        await self.mq.send(target_agent, msg)
+        return msg
+
+    async def send_progress(
+        self,
+        target_agent: str,
+        task_id: str,
+        session_id: str,
+        progress: float,
+        message: str = "",
+    ) -> AHPMessage:
+        """Send progress (async)"""
+        msg = AHPMessage(
+            method=AHPMethod.PROGRESS,
+            agent_id="leader",
+            target_agent=target_agent,
+            task_id=task_id,
+            session_id=session_id,
+            payload={"progress": progress, "message": message},
+        )
+        await self.mq.send(target_agent, msg)
+        return msg
+
+
+class AsyncAHPReceiver:
+    """Async AHP Receiver"""
+
+    def __init__(self, agent_id: str, message_queue: AsyncMessageQueue):
+        self.agent_id = agent_id
+        self.mq = message_queue
+
+    async def receive(self, timeout: float = 30, auto_ack: bool = True) -> Optional[AHPMessage]:
+        """Receive message (async)"""
+        msg = await self.mq.receive(self.agent_id, timeout)
+        if msg:
+            logger.debug(f"ASYNC RECV [<-{self.agent_id}] {msg.method}")
+            await self.mq.update_heartbeat(self.agent_id)
+        return msg
+
+    async def wait_for_task(self, timeout: float = 60) -> Optional[AHPMessage]:
+        """Wait for task (async)"""
+        msg = await self.receive(timeout)
+        if msg and msg.method == AHPMethod.TASK:
+            return msg
+        return None
+
+
+class AsyncTokenController:
+    """Async Token Controller"""
+
+    def __init__(self, default_limit: int = 500):
+        self.default_limit = default_limit
+        self._quotas: Dict[str, int] = {}
+
+    def get_limit(self, agent_id: str) -> int:
+        return self._quotas.get(agent_id, self.default_limit)
+
+    def set_limit(self, agent_id: str, limit: int):
+        self._quotas[agent_id] = limit
+
+    def create_compact_instruction(
+        self, user_profile: Dict, task: Dict, context: str = "", max_tokens: int = None
+    ) -> str:
+        """Create compact instruction (same as sync version)"""
+        limit = max_tokens or self.default_limit
+
+        instruction_parts = [
+            f"Task: {task.get('category', 'unknown')}",
+            f"Target: {user_profile.get('name', 'User')}",
+        ]
+
+        key_info = []
+        if user_profile.get("gender"):
+            key_info.append(f"Gender: {user_profile['gender']}")
+        if user_profile.get("age"):
+            key_info.append(f"Age: {user_profile['age']}")
+        if user_profile.get("occupation"):
+            key_info.append(f"Occupation: {user_profile['occupation']}")
+        if user_profile.get("mood"):
+            key_info.append(f"Mood: {user_profile['mood']}")
+        if user_profile.get("hobbies"):
+            key_info.append(f"Hobbies: {','.join(user_profile['hobbies'])}")
+
+        if key_info:
+            instruction_parts.append("User Info: " + "; ".join(key_info))
+
+        if task.get("instruction"):
+            instruction_parts.append(f"Requirement: {task['instruction']}")
+
+        if context:
+            available = limit - sum(len(p) for p in instruction_parts) - 50
+            if available > 100:
+                instruction_parts.append(f"Context: {context[:available]}")
+
+        return "\n".join(instruction_parts)
+
+
+# Global async message queue instance
+_async_global_mq: Optional[AsyncMessageQueue] = None
+
+
+async def get_async_message_queue() -> AsyncMessageQueue:
+    """Get global async message queue"""
+    global _async_global_mq
+    if _async_global_mq is None:
+        _async_global_mq = AsyncMessageQueue()
+    return _async_global_mq
+
+
+async def reset_async_message_queue():
+    """Reset async message queue"""
+    global _async_global_mq
+    _async_global_mq = None

@@ -3,6 +3,8 @@ Local Model Integration - gpt-oss-20b
 """
 
 import requests
+import httpx
+import asyncio
 from .config import config
 
 
@@ -39,7 +41,7 @@ class LocalLLM:
             return False
 
     def invoke(self, prompt: str, system_prompt: str = "") -> str:
-        """Invoke model"""
+        """Invoke model (sync)"""
         if not self.available:
             return "Local model not connected"
 
@@ -64,6 +66,47 @@ class LocalLLM:
         except Exception as e:
             return f"Invocation failed: {e}"
 
+    async def ainvoke(self, prompt: str, system_prompt: str = "") -> str:
+        """Invoke model (async)"""
+        if not self.available:
+            return "Local model not connected"
+
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    f"{self.base_url}/chat/completions",
+                    json={
+                        "model": self.model_name,
+                        "messages": messages,
+                        "temperature": self.temperature,
+                        "max_tokens": self.max_tokens,
+                    },
+                    timeout=60.0,
+                )
+                data = resp.json()
+                return data["choices"][0]["message"]["content"]
+        except Exception as e:
+            return f"Async invocation failed: {e}"
+
+    async def acheck_connection(self) -> bool:
+        """Check if model service is available (async)"""
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(f"{self.base_url}/models", timeout=5.0)
+                if resp.status_code == 200:
+                    models = resp.json()
+                    for m in models.get("data", []):
+                        if self.model_name in m.get("id", ""):
+                            return True
+                return False
+        except:
+            return False
+
     def __repr__(self):
         status = "connected" if self.available else "not connected"
         return f"LocalLLM({self.model_name}, {status})"
@@ -77,6 +120,11 @@ class MockLLM:
         self.available = True
 
     def invoke(self, prompt: str, system_prompt: str = "") -> str:
+        return self.response
+
+    async def ainvoke(self, prompt: str, system_prompt: str = "") -> str:
+        """Mock async invoke"""
+        await asyncio.sleep(0.1)  # Simulate async delay
         return self.response
 
 

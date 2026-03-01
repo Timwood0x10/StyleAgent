@@ -2,6 +2,7 @@
 Sub Agent - Outfit Recommendation Execution (using AHP Protocol)
 """
 
+import asyncio
 import json
 import threading
 from typing import Dict, Any, Optional
@@ -233,3 +234,160 @@ class OutfitAgentFactory:
             "agent_bottom": OutfitSubAgent("agent_bottom", "bottom", llm),
             "agent_shoes": OutfitSubAgent("agent_shoes", "shoes", llm),
         }
+
+
+# ========== Async Version ==========
+
+
+class AsyncOutfitSubAgent:
+    """Async Outfit Sub Agent"""
+
+    def __init__(self, agent_id: str, category: str, llm: LocalLLM):
+        self.agent_id = agent_id
+        self.category = category
+        self.llm = llm
+        self.system_prompt = CATEGORY_PROMPTS.get(
+            category, "You are a fashion consultant"
+        )
+        self.mq = None
+        self.receiver = None
+        self.sender = None
+        self._running = False
+        self._task: Optional[asyncio.Task] = None
+
+    async def start(self):
+        """Start async agent"""
+        from ..protocol import get_async_message_queue, AsyncAHPReceiver, AsyncAHPSender
+
+        self.mq = await get_async_message_queue()
+        self.receiver = AsyncAHPReceiver(self.agent_id, self.mq)
+        self.sender = AsyncAHPSender(self.mq)
+        self._running = True
+        self._task = asyncio.create_task(self._run_loop())
+        logger.info(f"Async {self.agent_id} started")
+
+    async def stop(self):
+        """Stop async agent"""
+        self._running = False
+        if self._task:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+        logger.info(f"Async {self.agent_id} stopped")
+
+    async def _run_loop(self):
+        """Main async loop"""
+        while self._running:
+            try:
+                msg = await asyncio.wait_for(
+                    self.receiver.wait_for_task(timeout=5),
+                    timeout=5.0
+                )
+                if msg:
+                    logger.info(f"[Async {self.agent_id}] received task: {msg.payload.get('category')}")
+                    await self._handle_task(msg)
+            except asyncio.TimeoutError:
+                continue
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in async loop: {e}")
+
+    async def _handle_task(self, msg):
+        """Handle task (async)"""
+        task_id = msg.task_id
+        session_id = msg.session_id
+        payload = msg.payload
+
+        try:
+            # 1. Send progress
+            await self.sender.send_progress("leader", task_id, session_id, 0.1, "Starting")
+
+            # 2. Execute recommendation
+            user_info = payload.get("user_info", {})
+            profile = UserProfile(
+                name=user_info.get("name", "User"),
+                gender=user_info.get("gender", "male"),
+                age=user_info.get("age", 25),
+                occupation=user_info.get("occupation", ""),
+                hobbies=user_info.get("hobbies", []),
+                mood=user_info.get("mood", "normal"),
+                season=user_info.get("season", "spring"),
+                occasion=user_info.get("occasion", "daily"),
+            )
+
+            await self.sender.send_progress("leader", task_id, session_id, 0.5, "Recommending...")
+            result = await self._recommend(profile)
+
+            await self.sender.send_progress("leader", task_id, session_id, 0.9, "Completed")
+
+            # 3. Return result
+            await self.sender.send_result(
+                "leader",
+                task_id,
+                session_id,
+                {
+                    "category": self.category,
+                    "items": result.items,
+                    "colors": result.colors,
+                    "styles": result.styles,
+                    "reasons": result.reasons,
+                    "price_range": result.price_range,
+                },
+                status="success",
+            )
+
+            logger.info(f"[Async {self.agent_id}] task completed")
+
+        except Exception as e:
+            await self.sender.send_result(
+                "leader", task_id, session_id, {"error": str(e)}, status="failed"
+            )
+            logger.error(f"[Async {self.agent_id}] task failed: {e}")
+
+    async def _recommend(self, user_profile: UserProfile) -> OutfitRecommendation:
+        """Execute recommendation (async)"""
+        prompt = self._build_prompt(user_profile)
+        response = await self.llm.ainvoke(prompt, self.system_prompt)
+        return self._parse_response(response)
+
+    def _build_prompt(self, user_profile: UserProfile) -> str:
+        """Build prompt"""
+        return f"""Based on the following user profile, recommend {self.category} items:
+
+User: {user_profile.name}
+Gender: {user_profile.gender.value}
+Age: {user_profile.age}
+Occupation: {user_profile.occupation}
+Hobbies: {', '.join(user_profile.hobbies)}
+Mood: {user_profile.mood}
+Season: {user_profile.season}
+Occasion: {user_profile.occasion}
+
+Please provide your recommendation in JSON format with keys: category, items, colors, styles, reasons, price_range."""
+
+
+class AsyncOutfitAgentFactory:
+    """Async Outfit Agent Factory"""
+
+    @staticmethod
+    async def create_agents(llm: LocalLLM) -> Dict[str, AsyncOutfitSubAgent]:
+        """Create all async outfit agents"""
+        agents = {
+            "agent_head": AsyncOutfitSubAgent("agent_head", "head", llm),
+            "agent_top": AsyncOutfitSubAgent("agent_top", "top", llm),
+            "agent_bottom": AsyncOutfitSubAgent("agent_bottom", "bottom", llm),
+            "agent_shoes": AsyncOutfitSubAgent("agent_shoes", "shoes", llm),
+        }
+        # Start all agents
+        for agent in agents.values():
+            await agent.start()
+        return agents
+
+    @staticmethod
+    async def stop_agents(agents: Dict[str, AsyncOutfitSubAgent]):
+        """Stop all async agents"""
+        for agent in agents.values():
+            await agent.stop()

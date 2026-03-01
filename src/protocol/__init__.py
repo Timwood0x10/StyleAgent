@@ -13,6 +13,13 @@ from .ahp import (
     TokenController,
     get_message_queue,
     reset_message_queue,
+    # Async versions
+    AsyncMessageQueue,
+    AsyncAHPSender,
+    AsyncAHPReceiver,
+    AsyncTokenController,
+    get_async_message_queue,
+    reset_async_message_queue,
 )
 
 __all__ = [
@@ -26,4 +33,11 @@ __all__ = [
     "TokenController",
     "get_message_queue",
     "reset_message_queue",
+    # Async versions
+    "AsyncMessageQueue",
+    "AsyncAHPSender",
+    "AsyncAHPReceiver",
+    "AsyncTokenController",
+    "get_async_message_queue",
+    "reset_async_message_queue",
 ]
