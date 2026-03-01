@@ -17,7 +17,7 @@ from ..core.models import (
 )
 from ..core.validator import ResultValidator, ValidationLevel
 from ..core.registry import TaskRegistry, get_task_registry
-from ..core.errors import RetryHandler, RetryConfig, ErrorType
+from ..core.errors import RetryHandler, RetryConfig, ErrorType, CircuitBreaker
 from ..utils.llm import LocalLLM
 from ..utils import get_logger
 from ..protocol import get_message_queue, AHPSender, AHPError, AHPErrorCode, AHPMethod
@@ -66,6 +66,12 @@ class LeaderAgent:
         )
         self.retry_handler = RetryHandler(retry_config)
 
+        # Initialize circuit breaker for LLM calls
+        self.circuit_breaker = CircuitBreaker(
+            failure_threshold=5,  # Open after 5 consecutive failures
+            timeout=60  # Try again after 60 seconds
+        )
+
     def _execute_with_timeout(self, func: Callable, timeout: int = 30, *args, **kwargs) -> Any:
         """Execute function with timeout (cross-platform)"""
         import threading
@@ -91,6 +97,58 @@ class LeaderAgent:
             raise exception[0]
 
         return result[0] if result else None
+
+    def _llm_call_with_circuit_breaker(
+        self,
+        func_name: str,
+        func: Callable,
+        *args,
+        **kwargs
+    ) -> Any:
+        """
+        Execute LLM call with circuit breaker and retry
+        """
+        # Check circuit breaker
+        if not self.circuit_breaker.can_execute():
+            logger.warning(f"Circuit breaker OPEN for {func_name}, using fallback")
+            return self._get_fallback_result(func_name)
+
+        try:
+            # Execute with retry
+            result = self.retry_handler.execute_with_retry(
+                func,
+                task_id=f"leader_{func_name}",
+                *args,
+                **kwargs
+            )
+            self.circuit_breaker.record_success()
+            return result
+        except Exception as e:
+            self.circuit_breaker.record_failure()
+            logger.error(f"Circuit breaker recorded failure for {func_name}: {e}")
+            return self._get_fallback_result(func_name)
+
+    def _get_fallback_result(self, func_name: str) -> Any:
+        """
+        Get fallback result when circuit is open or retry exhausted
+        """
+        if func_name == "parse_user_profile":
+            # Return default user profile
+            return UserProfile(
+                name="User",
+                gender=Gender.MALE,
+                age=25,
+                occupation="",
+                hobbies=[],
+                mood="normal",
+                budget="medium",
+                season="spring",
+                occasion="daily",
+            )
+        elif func_name == "aggregate_results":
+            # Return empty result
+            return None
+        return None
 
     def process(self, user_input: str) -> OutfitResult:
         """Process user input - full workflow"""
@@ -143,9 +201,9 @@ Please return JSON in the following format:
 Only return JSON, no other content.
 """
 
-        response = self.retry_handler.execute_with_retry(
+        response = self._llm_call_with_circuit_breaker(
+            "parse_user_profile",
             self.llm.invoke,
-            task_id="parse_profile",
             prompt=prompt,
             system_prompt=SYSTEM_PROMPT,
         )
@@ -514,9 +572,9 @@ Return JSON format:
 }}
 """
 
-        response = self.retry_handler.execute_with_retry(
+        response = self._llm_call_with_circuit_breaker(
+            "aggregate_results",
             self.llm.invoke,
-            task_id="aggregate_results",
             prompt=style_prompt,
             system_prompt=SYSTEM_PROMPT,
         )

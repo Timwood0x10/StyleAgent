@@ -17,7 +17,7 @@ from ..utils.llm import LocalLLM
 from ..utils import get_logger
 from ..protocol import get_message_queue, AHPReceiver, AHPSender, AHPError, AHPErrorCode
 from ..storage.postgres import StorageLayer
-from ..core.errors import RetryHandler, RetryConfig, ErrorType
+from ..core.errors import RetryHandler, RetryConfig, ErrorType, CircuitBreaker
 
 # Logger for this module
 logger = get_logger(__name__)
@@ -83,6 +83,12 @@ class OutfitSubAgent:
             ],
         )
         self.retry_handler = RetryHandler(retry_config)
+
+        # Initialize circuit breaker for LLM calls
+        self.circuit_breaker = CircuitBreaker(
+            failure_threshold=5,
+            timeout=60
+        )
 
     def _get_db(self) -> StorageLayer:
         """Lazy init database connection"""
@@ -232,6 +238,54 @@ class OutfitSubAgent:
             f"occasion {user_profile.occasion}, budget {user_profile.budget}"
         )
 
+    def _llm_call_with_circuit_breaker(
+        self,
+        func_name: str,
+        func,
+        *args,
+        **kwargs
+    ) -> Any:
+        """
+        Execute LLM call with circuit breaker and retry
+        """
+        from typing import Callable
+        
+        # Check circuit breaker
+        if not self.circuit_breaker.can_execute():
+            logger.warning(f"Circuit breaker OPEN for {self.agent_id}:{func_name}, using fallback")
+            return self._get_fallback_result(func_name)
+
+        try:
+            # Execute with retry
+            result = self.retry_handler.execute_with_retry(
+                func,
+                task_id=f"{self.agent_id}_{func_name}",
+                *args,
+                **kwargs
+            )
+            self.circuit_breaker.record_success()
+            return result
+        except Exception as e:
+            self.circuit_breaker.record_failure()
+            logger.error(f"Circuit breaker recorded failure for {self.agent_id}:{func_name}: {e}")
+            return self._get_fallback_result(func_name)
+
+    def _get_fallback_result(self, func_name: str) -> Any:
+        """
+        Get fallback result when circuit is open or retry exhausted
+        """
+        if "recommend" in func_name:
+            # Return default recommendation
+            return json.dumps({
+                "category": self.category,
+                "items": ["basic item"],
+                "colors": ["neutral color"],
+                "styles": ["casual"],
+                "reasons": ["default recommendation due to service unavailable"],
+                "price_range": "medium"
+            })
+        return None
+
     def _recommend(self, user_profile: UserProfile, compact_instruction: str = "") -> OutfitRecommendation:
         """Execute recommendation with tools and RAG"""
 
@@ -276,9 +330,11 @@ class OutfitSubAgent:
         prompt = self._build_prompt(
             user_profile, fashion_info, weather_info, style_info, compact_instruction, rag_context
         )
-        response = self.retry_handler.execute_with_retry(
+        
+        # Execute LLM call with circuit breaker
+        response = self._llm_call_with_circuit_breaker(
+            f"recommend_{self.category}",
             self.llm.invoke,
-            task_id=f"recommend_{self.category}",
             prompt=prompt,
             system_prompt=self.system_prompt,
         )
