@@ -5,7 +5,7 @@ Sub Agent - Outfit Recommendation Execution (using AHP Protocol)
 import asyncio
 import json
 import threading
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from ..core.models import (
     UserProfile,
     OutfitRecommendation,
@@ -16,6 +16,7 @@ from ..core.models import (
 from ..utils.llm import LocalLLM
 from ..utils import get_logger
 from ..protocol import get_message_queue, AHPReceiver, AHPSender, AHPError, AHPErrorCode
+from ..storage.postgres import StorageLayer
 
 # Logger for this module
 logger = get_logger(__name__)
@@ -64,6 +65,15 @@ class OutfitSubAgent:
         self.receiver = AHPReceiver(agent_id, self.mq)
         self.sender = AHPSender(self.mq, self.agent_id)
         self._running = False
+
+        # Initialize database for RAG
+        self._db: Optional[StorageLayer] = None
+
+    def _get_db(self) -> StorageLayer:
+        """Lazy init database connection"""
+        if self._db is None:
+            self._db = StorageLayer()
+        return self._db
 
     def start(self):
         """Start agent (listen to message queue)"""
@@ -151,8 +161,64 @@ class OutfitSubAgent:
             self.mq.to_dlq(self.agent_id, msg, str(e))
             logger.error(f"[{self.agent_id}] task failed: {e}")
 
+    def _get_rag_context(self, user_profile: UserProfile, limit: int = 3) -> str:
+        """
+        Get RAG context from historical recommendations
+        
+        Args:
+            user_profile: User profile for generating query
+            limit: Maximum number of similar recommendations to retrieve
+            
+        Returns:
+            Formatted historical recommendations context
+        """
+        try:
+            # Generate query text from user profile
+            query_text = self._build_rag_query(user_profile)
+            
+            # Generate embedding
+            embedding = self.llm.embed(query_text)
+            
+            # Search similar recommendations in vector DB
+            db = self._get_db()
+            similar_results = db.search_similar(
+                embedding=embedding,
+                session_id=None,  # Search across all sessions
+                limit=limit
+            )
+            
+            if not similar_results:
+                return ""
+            
+            # Format historical recommendations as context
+            context_parts = []
+            for i, result in enumerate(similar_results, 1):
+                content = result.get("content", "")
+                metadata = result.get("metadata", {})
+                if content:
+                    context_parts.append(
+                        f"- Similar recommendation {i}: {content} "
+                        f"(mood: {metadata.get('mood', 'N/A')}, "
+                        f"season: {metadata.get('season', 'N/A')})"
+                    )
+            
+            return "\n".join(context_parts)
+            
+        except Exception as e:
+            logger.warning(f"RAG context retrieval failed: {e}")
+            return ""
+
+    def _build_rag_query(self, user_profile: UserProfile) -> str:
+        """Build query text for RAG embedding"""
+        return (
+            f"Recommend {self.category} for user who is {user_profile.gender.value}, "
+            f"age {user_profile.age}, occupation {user_profile.occupation}, "
+            f"mood {user_profile.mood}, season {user_profile.season}, "
+            f"occasion {user_profile.occasion}, budget {user_profile.budget}"
+        )
+
     def _recommend(self, user_profile: UserProfile, compact_instruction: str = "") -> OutfitRecommendation:
-        """Execute recommendation with tools"""
+        """Execute recommendation with tools and RAG"""
 
         # Use tools to get additional context
         from .resources import AgentResourceFactory
@@ -188,9 +254,12 @@ class OutfitSubAgent:
             budget=user_profile.budget,
         )
 
-        # Build enhanced prompt with tool results and compact_instruction
+        # RAG: Search similar historical recommendations
+        rag_context = self._get_rag_context(user_profile)
+
+        # Build enhanced prompt with tool results, compact_instruction and RAG context
         prompt = self._build_prompt(
-            user_profile, fashion_info, weather_info, style_info, compact_instruction
+            user_profile, fashion_info, weather_info, style_info, compact_instruction, rag_context
         )
         response = self.llm.invoke(prompt, self.system_prompt)
 
@@ -203,8 +272,9 @@ class OutfitSubAgent:
         weather_info: dict = None,
         style_info: dict = None,
         compact_instruction: str = "",
+        rag_context: str = "",
     ) -> str:
-        """Build prompt with tool results"""
+        """Build prompt with tool results and RAG context"""
 
         category_names = {
             "head": "head accessories (hats, glasses, necklaces, earrings, etc.)",
@@ -258,7 +328,12 @@ class OutfitSubAgent:
         if compact_instruction:
             compact_section = f"\n[Compact Instruction - follow this if available]:\n{compact_instruction}\n"
 
-        prompt = f"""{compact_section}
+        # Include RAG context from historical recommendations
+        rag_section = ""
+        if rag_context:
+            rag_section = f"\n[Historical Similar Recommendations - for reference]:\n{rag_context}\n"
+
+        prompt = f"""{compact_section}{rag_section}
 User Info:
 {user_profile.to_prompt_context()}
 {tool_context}

@@ -20,6 +20,7 @@ from ..core.registry import TaskRegistry, get_task_registry
 from ..utils.llm import LocalLLM
 from ..utils import get_logger
 from ..protocol import get_message_queue, AHPSender, AHPError, AHPErrorCode, AHPMethod
+from ..storage.postgres import StorageLayer
 
 # Logger for this module
 logger = get_logger(__name__)
@@ -48,6 +49,7 @@ class LeaderAgent:
         self.session_id = ""
         self.validator = ResultValidator(level=ValidationLevel.NORMAL)
         self.registry = get_task_registry()
+        self._db = StorageLayer()  # For RAG vector storage
 
     def process(self, user_input: str) -> OutfitResult:
         """Process user input - full workflow"""
@@ -371,6 +373,53 @@ Only return JSON, no other content.
 
         return results
 
+    def _save_for_rag(
+        self, 
+        user_profile: UserProfile, 
+        results: Dict[str, OutfitRecommendation]
+    ):
+        """
+        Save recommendations to vector DB for RAG
+        
+        Args:
+            user_profile: User profile
+            results: Dictionary of category -> OutfitRecommendation
+        """
+        try:
+            for category, rec in results.items():
+                # Build content string for embedding
+                content = (
+                    f"Category: {category}, "
+                    f"Items: {', '.join(rec.items)}, "
+                    f"Colors: {', '.join(rec.colors)}, "
+                    f"Styles: {', '.join(rec.styles)}, "
+                    f"Reasons: {', '.join(rec.reasons)}"
+                )
+                
+                # Generate embedding
+                embedding = self.llm.embed(content)
+                
+                # Save to vector DB
+                metadata = {
+                    "mood": user_profile.mood,
+                    "season": user_profile.season,
+                    "occupation": user_profile.occupation,
+                    "age": user_profile.age,
+                    "gender": user_profile.gender.value,
+                    "occasion": user_profile.occasion,
+                }
+                
+                self._db.save_vector(
+                    session_id=self.session_id,
+                    content=content,
+                    embedding=embedding,
+                    metadata=metadata,
+                )
+                logger.debug(f"Saved vector for {category} in session {self.session_id}")
+                
+        except Exception as e:
+            logger.warning(f"Failed to save vectors for RAG: {e}")
+
     def aggregate_results(
         self, user_profile: UserProfile, results: Dict[str, OutfitRecommendation]
     ) -> OutfitResult:
@@ -426,7 +475,7 @@ Return JSON format:
             end = response.rfind("}") + 1
             if start >= 0 and end > start:
                 data = json.loads(response[start:end])
-                return OutfitResult(
+                result = OutfitResult(
                     session_id=self.session_id,
                     user_profile=user_profile,
                     head=validated_results.get("head"),
@@ -436,10 +485,13 @@ Return JSON format:
                     overall_style=data.get("overall_style", ""),
                     summary=data.get("summary", ""),
                 )
+                # Save recommendations to vector DB for RAG
+                self._save_for_rag(user_profile, validated_results)
+                return result
         except (ValueError, json.JSONDecodeError):
             pass
 
-        return OutfitResult(
+        result = OutfitResult(
             session_id=self.session_id,
             user_profile=user_profile,
             head=validated_results.get("head"),
@@ -447,6 +499,9 @@ Return JSON format:
             bottom=validated_results.get("bottom"),
             shoes=validated_results.get("shoes"),
         )
+        # Save recommendations to vector DB for RAG
+        self._save_for_rag(user_profile, validated_results)
+        return result
 
 
 # ========== Async Version ==========
@@ -461,6 +516,7 @@ class AsyncLeaderAgent:
         self.mq = None
         self.sender = None
         self.session_id = ""
+        self._db = StorageLayer()  # For RAG vector storage
 
     async def _init_mq(self):
         """Initialize async message queue"""
@@ -469,6 +525,53 @@ class AsyncLeaderAgent:
         if self.mq is None:
             self.mq = await get_async_message_queue()
             self.sender = AsyncAHPSender(self.mq)
+
+    def _save_for_rag(
+        self, 
+        user_profile: UserProfile, 
+        results: Dict[str, OutfitRecommendation]
+    ):
+        """
+        Save recommendations to vector DB for RAG (sync version for async agent)
+        
+        Args:
+            user_profile: User profile
+            results: Dictionary of category -> OutfitRecommendation
+        """
+        try:
+            for category, rec in results.items():
+                # Build content string for embedding
+                content = (
+                    f"Category: {category}, "
+                    f"Items: {', '.join(rec.items)}, "
+                    f"Colors: {', '.join(rec.colors)}, "
+                    f"Styles: {', '.join(rec.styles)}, "
+                    f"Reasons: {', '.join(rec.reasons)}"
+                )
+                
+                # Generate embedding
+                embedding = self.llm.embed(content)
+                
+                # Save to vector DB
+                metadata = {
+                    "mood": user_profile.mood,
+                    "season": user_profile.season,
+                    "occupation": user_profile.occupation,
+                    "age": user_profile.age,
+                    "gender": user_profile.gender.value,
+                    "occasion": user_profile.occasion,
+                }
+                
+                self._db.save_vector(
+                    session_id=self.session_id,
+                    content=content,
+                    embedding=embedding,
+                    metadata=metadata,
+                )
+                logger.debug(f"Saved vector for {category} in session {self.session_id}")
+                
+        except Exception as e:
+            logger.warning(f"Failed to save vectors for RAG: {e}")
 
     async def process(self, user_input: str) -> OutfitResult:
         """Process user input (async)"""
@@ -720,7 +823,7 @@ Please provide:
             end = response.rfind("}") + 1
             if start >= 0 and end > start:
                 data = json.loads(response[start:end])
-                return OutfitResult(
+                result = OutfitResult(
                     session_id=self.session_id,
                     user_profile=user_profile,
                     head=results.get("head"),
@@ -730,10 +833,13 @@ Please provide:
                     overall_style=data.get("overall_style", ""),
                     summary=data.get("summary", ""),
                 )
+                # Save recommendations to vector DB for RAG
+                self._save_for_rag(user_profile, results)
+                return result
         except Exception as e:
             logger.warning(f"Failed to aggregate results: {e}")
 
-        return OutfitResult(
+        result = OutfitResult(
             session_id=self.session_id,
             user_profile=user_profile,
             head=results.get("head"),
@@ -741,3 +847,6 @@ Please provide:
             bottom=results.get("bottom"),
             shoes=results.get("shoes"),
         )
+        # Save recommendations to vector DB for RAG
+        self._save_for_rag(user_profile, results)
+        return result

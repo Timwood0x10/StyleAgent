@@ -115,6 +115,19 @@ class Config:
     def LLM_TIMEOUT(self) -> int:
         return int(self._get("llm.timeout", 60))
 
+    # ==================== Embedding ====================
+    @property
+    def EMBEDDING_MODEL(self) -> str:
+        return self._get("embedding.model", "text-embedding-3-small")
+
+    @property
+    def EMBEDDING_BASE_URL(self) -> str:
+        return self._get("embedding.base_url", None)  # None means use LLM_BASE_URL
+
+    @property
+    def EMBEDDING_DIM(self) -> int:
+        return int(self._get("embedding.dimension", 1536))
+
     # ==================== AHP ====================
     @property
     def AHP_TOKEN_LIMIT(self) -> int:
