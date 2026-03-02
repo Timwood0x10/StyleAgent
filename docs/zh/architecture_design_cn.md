@@ -1,4 +1,4 @@
-# iFlow 多智能体穿搭推荐系统架构设计
+# 多智能体穿搭推荐系统架构设计
 
 ## 1. 系统架构图
 
@@ -65,14 +65,14 @@
 ```python
 class LeaderAgent:
     """主智能体: 任务协调与结果聚合"""
-    
+  
     def __init__(self, llm: ChatModel):
         self.llm = llm
         self.validator = ResultValidator()
         self.registry = TaskRegistry()
         self.circuit_breaker = CircuitBreaker()
         self.retry_handler = RetryHandler()
-    
+  
     def process(self, user_input: str) -> OutfitResult:
         # 1. 解析用户信息
         # 2. 分析任务类别
@@ -80,15 +80,15 @@ class LeaderAgent:
         # 4. 收集验证结果
         # 5. 聚合输出
         pass
-    
+  
     def parse_user_profile(self, user_input: str) -> UserProfile:
         """解析用户输入，提取用户画像"""
         pass
-    
+  
     def create_tasks(self, user_profile: UserProfile) -> List[OutfitTask]:
         """任务分解，确定推荐品类"""
         pass
-    
+  
     def aggregate_results(self, ...) -> OutfitResult:
         """结果聚合与验证"""
         pass
@@ -99,7 +99,7 @@ class LeaderAgent:
 ```python
 class OutfitSubAgent:
     """子智能体: 独立执行品类推荐任务"""
-    
+  
     def __init__(
         self, 
         agent_id: str,
@@ -112,11 +112,11 @@ class OutfitSubAgent:
         self.resources = AgentResources()
         self.retry_handler = RetryHandler()
         self.circuit_breaker = CircuitBreaker()
-    
+  
     def _recommend(self, profile: UserProfile) -> OutfitRecommendation:
         """执行推荐: 工具 + RAG + LLM"""
         pass
-    
+  
     def _get_rag_context(self, profile: UserProfile) -> str:
         """获取历史相似推荐作为上下文"""
         pass
@@ -127,14 +127,14 @@ class OutfitSubAgent:
 ```python
 class AHPProtocol:
     """Agent HTTP-like Protocol - 智能体通信协议"""
-    
+  
     # 消息方法
     METHOD_TASK = "TASK"       # 分发任务
     METHOD_RESULT = "RESULT"   # 返回结果
     METHOD_PROGRESS = "PROGRESS"  # 进度报告
     METHOD_HEARTBEAT = "HEARTBEAT"  # 心跳
     METHOD_ACK = "ACK"         # 确认
-    
+  
     # 特性
     - MessageQueue (消息队列)
     - Token Controller (Token控制)
@@ -147,15 +147,15 @@ class AHPProtocol:
 ```python
 class TaskRegistry:
     """任务注册与状态管理"""
-    
+  
     def register_task(self, session_id, title, description, category) -> str:
         """注册新任务"""
         pass
-    
+  
     def claim_task(self, agent_id, task_id) -> bool:
         """认领任务（确保唯一执行）"""
         pass
-    
+  
     def update_status(self, task_id, status, result):
         """更新任务状态"""
         pass
@@ -258,18 +258,18 @@ CREATE INDEX idx_contexts_session_agent ON agent_contexts(session_id, agent_id);
 
 每个 Sub Agent 配备以下工具：
 
-| 工具 | 功能 |
-|------|------|
-| FashionSearchTool | 根据心情/职业/季节搜索时尚建议 |
-| WeatherCheckTool | 获取天气信息和建议 |
-| StyleRecommendTool | 获取风格推荐和搭配建议 |
+| 工具               | 功能                           |
+| ------------------ | ------------------------------ |
+| FashionSearchTool  | 根据心情/职业/季节搜索时尚建议 |
+| WeatherCheckTool   | 获取天气信息和建议             |
+| StyleRecommendTool | 获取风格推荐和搭配建议         |
 
 ### 3.2 Data Sources (数据源)
 
-| 数据源 | 功能 |
-|--------|------|
+| 数据源          | 功能                                 |
+| --------------- | ------------------------------------ |
 | FashionDatabase | 时尚数据库（趋势颜色、风格、年龄段） |
-| UserHistoryDB | 用户历史推荐记录 |
+| UserHistoryDB   | 用户历史推荐记录                     |
 
 ### 3.3 Private Context (私有上下文)
 
@@ -323,7 +323,7 @@ agents:
       - style_recommend
     token_limit: 500
     timeout: 60
-    
+  
   - id: "agent_top"
     category: "top"
     # ...
@@ -338,14 +338,14 @@ agents:
 
 ## 6. 核心特性总结
 
-| 特性 | 说明 |
-|------|------|
-| 并行处理 | 4 个 Sub Agent 同时处理不同品类 |
-| Token 控制 | 压缩指令，减少 LLM token 消耗 |
-| 断路器 | LLM 失败 5 次后自动熔断 |
-| 重试机制 | 指数退避策略，最多重试 3 次 |
-| RAG | 基于历史推荐生成上下文 |
-| 私有上下文 | 每个 Agent 独立内存隔离 |
-| DLQ | 失败消息进入死信队列 |
-| 多轮对话 | 支持用户反馈调整推荐 |
-| 结果验证 | 字段完整性 + 类型 + 合理性检查 |
+| 特性       | 说明                            |
+| ---------- | ------------------------------- |
+| 并行处理   | 4 个 Sub Agent 同时处理不同品类 |
+| Token 控制 | 压缩指令，减少 LLM token 消耗   |
+| 断路器     | LLM 失败 5 次后自动熔断         |
+| 重试机制   | 指数退避策略，最多重试 3 次     |
+| RAG        | 基于历史推荐生成上下文          |
+| 私有上下文 | 每个 Agent 独立内存隔离         |
+| DLQ        | 失败消息进入死信队列            |
+| 多轮对话   | 支持用户反馈调整推荐            |
+| 结果验证   | 字段完整性 + 类型 + 合理性检查  |

@@ -1,4 +1,4 @@
-# iFlow Multi-Agent Outfit Recommendation System Processing Flow
+# Multi-Agent Outfit Recommendation System Processing Flow
 
 ## 1. Complete Processing Flow Overview
 
@@ -171,13 +171,13 @@ Return complete outfit recommendation to user
 
 ### 2.1 Message Types
 
-| Message Type | Direction | Description |
-|--------------|-----------|-------------|
-| TASK | Leader → Sub | Dispatch task |
-| RESULT | Sub → Leader | Return result |
-| PROGRESS | Sub → Leader | Progress report |
-| ACK | Bidirectional | Message acknowledgment |
-| HEARTBEAT | Bidirectional | Heartbeat check |
+| Message Type | Direction     | Description            |
+| ------------ | ------------- | ---------------------- |
+| TASK         | Leader → Sub | Dispatch task          |
+| RESULT       | Sub → Leader | Return result          |
+| PROGRESS     | Sub → Leader | Progress report        |
+| ACK          | Bidirectional | Message acknowledgment |
+| HEARTBEAT    | Bidirectional | Heartbeat check        |
 
 ### 2.2 Message Exchange
 
@@ -223,10 +223,10 @@ Context: {RAG history summary}
 
 ### 3.2 Token Savings
 
-| Item | Original | Compressed | Savings |
-|------|----------|------------|---------|
-| Instruction length | ~500 tokens | ~150 tokens | 70% |
-| Total Token consumption | ~2000 | ~1200 | 40% |
+| Item                    | Original    | Compressed  | Savings |
+| ----------------------- | ----------- | ----------- | ------- |
+| Instruction length      | ~500 tokens | ~150 tokens | 70%     |
+| Total Token consumption | ~2000       | ~1200       | 40%     |
 
 ---
 
@@ -513,11 +513,11 @@ ResultValidator.validate(result, "outfit", "top")
 
 ### 8.2 Validation Levels
 
-| Level | Description |
-|-------|-------------|
-| STRICT | Strict mode, must match format exactly |
-| NORMAL | Normal mode, key fields must exist |
-| LENIENT | Lenient mode, basic checks only |
+| Level   | Description                            |
+| ------- | -------------------------------------- |
+| STRICT  | Strict mode, must match format exactly |
+| NORMAL  | Normal mode, key fields must exist     |
+| LENIENT | Lenient mode, basic checks only        |
 
 ---
 
@@ -541,23 +541,23 @@ ResultValidator.validate(result, "outfit", "top")
               │ Result   │                      │  Result  │
               │Validator │◄─────────────────────│  Queue   │
               └──────────┘                      └──────────┘
-                    │                                 
-                    ▼                                 
-              ┌──────────┐                     
-              │ Aggregate│                     
-              │  + RAG   │                     
-              └──────────┘                     
-                    │                                 
-                    ▼                                 
-              ┌──────────┐                     
-              │ Storage  │                     
-              │  Layer   │                     
-              └──────────┘                     
-                    │                                 
-                    ▼                                 
-              ┌──────────┐                     
-              │ Return   │                     
-              │ Result   │                     
-              │ to User  │                     
+                    │                               
+                    ▼                               
+              ┌──────────┐                   
+              │ Aggregate│                   
+              │  + RAG   │                   
+              └──────────┘                   
+                    │                               
+                    ▼                               
+              ┌──────────┐                   
+              │ Storage  │                   
+              │  Layer   │                   
+              └──────────┘                   
+                    │                               
+                    ▼                               
+              ┌──────────┐                   
+              │ Return   │                   
+              │ Result   │                   
+              │ to User  │                   
               └──────────┘
 ```
