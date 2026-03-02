@@ -55,7 +55,9 @@ Note:
 class OutfitSubAgent:
     """Outfit Sub Agent (communicating via AHP Protocol)"""
 
-    def __init__(self, agent_id: str, category: str, llm: LocalLLM):
+    DEFAULT_MAX_LOOPS = 100  # Default maximum loop iterations
+
+    def __init__(self, agent_id: str, category: str, llm: LocalLLM, max_loops: int = DEFAULT_MAX_LOOPS):
         self.agent_id = agent_id
         self.category = category
         self.llm = llm
@@ -65,7 +67,11 @@ class OutfitSubAgent:
         self.mq = get_message_queue()
         self.receiver = AHPReceiver(agent_id, self.mq)
         self.sender = AHPSender(self.mq, self.agent_id)
+
+        # Agent state management
         self._running = False
+        self._loop_count = 0
+        self._max_loops = max_loops
 
         # Initialize database for RAG
         self._db: Optional[StorageLayer] = None
@@ -106,13 +112,19 @@ class OutfitSubAgent:
 
     def _run_loop(self):
         """Main loop - listen for messages"""
-        while self._running:
+        while self._running and self._loop_count < self._max_loops:
+            self._loop_count += 1
             msg = self.receiver.wait_for_task(timeout=5)
             if msg:
                 logger.info(
                     f"[{self.agent_id}] received task: {msg.payload.get('category')}"
                 )
                 self._handle_task(msg)
+
+        # Exit loop when stopped or max loops reached
+        if self._loop_count >= self._max_loops:
+            logger.warning(f"{self.agent_id} reached max loops ({self._max_loops}), stopping")
+        self._running = False
 
     def _handle_task(self, msg):
         """Handle task"""
@@ -489,7 +501,9 @@ class OutfitAgentFactory:
 class AsyncOutfitSubAgent:
     """Async Outfit Sub Agent"""
 
-    def __init__(self, agent_id: str, category: str, llm: LocalLLM):
+    DEFAULT_MAX_LOOPS = 100  # Default maximum loop iterations
+
+    def __init__(self, agent_id: str, category: str, llm: LocalLLM, max_loops: int = DEFAULT_MAX_LOOPS):
         self.agent_id = agent_id
         self.category = category
         self.llm = llm
@@ -499,7 +513,11 @@ class AsyncOutfitSubAgent:
         self.mq = None
         self.receiver = None
         self.sender = None
+
+        # Agent state management
         self._running = False
+        self._loop_count = 0
+        self._max_loops = max_loops
         self._task: Optional[asyncio.Task] = None
 
     async def start(self):
@@ -526,7 +544,8 @@ class AsyncOutfitSubAgent:
 
     async def _run_loop(self):
         """Main async loop"""
-        while self._running:
+        while self._running and self._loop_count < self._max_loops:
+            self._loop_count += 1
             try:
                 msg = await asyncio.wait_for(
                     self.receiver.wait_for_task(timeout=5), timeout=5.0
@@ -542,6 +561,11 @@ class AsyncOutfitSubAgent:
                 break
             except Exception as e:
                 logger.error(f"Error in async loop: {e}")
+
+        # Exit loop when stopped or max loops reached
+        if self._loop_count >= self._max_loops:
+            logger.warning(f"Async {self.agent_id} reached max loops ({self._max_loops}), stopping")
+        self._running = False
 
     async def _handle_task(self, msg):
         """Handle task (async)"""

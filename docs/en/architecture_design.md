@@ -1,4 +1,4 @@
-# iFlow Multi-Agent Outfit Recommendation System Architecture
+# Multi-Agent Outfit Recommendation System Architecture
 
 ## 1. System Architecture Diagram
 
@@ -67,14 +67,14 @@
 ```python
 class LeaderAgent:
     """Main Agent: Task Coordination and Result Aggregation"""
-    
+  
     def __init__(self, llm: ChatModel):
         self.llm = llm
         self.validator = ResultValidator()
         self.registry = TaskRegistry()
         self.circuit_breaker = CircuitBreaker()
         self.retry_handler = RetryHandler()
-    
+  
     def process(self, user_input: str) -> OutfitResult:
         # 1. Parse user profile
         # 2. Analyze task categories
@@ -82,15 +82,15 @@ class LeaderAgent:
         # 4. Collect and validate results
         # 5. Aggregate output
         pass
-    
+  
     def parse_user_profile(self, user_input: str) -> UserProfile:
         """Parse user input to extract user profile"""
         pass
-    
+  
     def create_tasks(self, user_profile: UserProfile) -> List[OutfitTask]:
         """Task decomposition, determine recommendation categories"""
         pass
-    
+  
     def aggregate_results(self, ...) -> OutfitResult:
         """Result aggregation and validation"""
         pass
@@ -101,7 +101,7 @@ class LeaderAgent:
 ```python
 class OutfitSubAgent:
     """Sub Agent: Independent category recommendation execution"""
-    
+  
     def __init__(
         self, 
         agent_id: str,
@@ -114,11 +114,11 @@ class OutfitSubAgent:
         self.resources = AgentResources()
         self.retry_handler = RetryHandler()
         self.circuit_breaker = CircuitBreaker()
-    
+  
     def _recommend(self, profile: UserProfile) -> OutfitRecommendation:
         """Execute recommendation: Tools + RAG + LLM"""
         pass
-    
+  
     def _get_rag_context(self, profile: UserProfile) -> str:
         """Get historical similar recommendations as context"""
         pass
@@ -129,14 +129,14 @@ class OutfitSubAgent:
 ```python
 class AHPProtocol:
     """Agent HTTP-like Protocol - Agent Communication Protocol"""
-    
+  
     # Message Methods
     METHOD_TASK = "TASK"         # Dispatch task
     METHOD_RESULT = "RESULT"     # Return result
     METHOD_PROGRESS = "PROGRESS" # Progress report
     METHOD_HEARTBEAT = "HEARTBEAT"  # Heartbeat
     METHOD_ACK = "ACK"           # Acknowledgment
-    
+  
     # Features
     - MessageQueue
     - Token Controller
@@ -149,15 +149,15 @@ class AHPProtocol:
 ```python
 class TaskRegistry:
     """Task Registration and Status Management"""
-    
+  
     def register_task(self, session_id, title, description, category) -> str:
         """Register new task"""
         pass
-    
+  
     def claim_task(self, agent_id, task_id) -> bool:
         """Claim task (ensure unique execution)"""
         pass
-    
+  
     def update_status(self, task_id, status, result):
         """Update task status"""
         pass
@@ -260,18 +260,18 @@ CREATE INDEX idx_contexts_session_agent ON agent_contexts(session_id, agent_id);
 
 Each Sub Agent is equipped with the following tools:
 
-| Tool | Function |
-|------|----------|
-| FashionSearchTool | Search fashion suggestions based on mood/occupation/season |
-| WeatherCheckTool | Get weather information and suggestions |
-| StyleRecommendTool | Get style recommendations and pairing suggestions |
+| Tool               | Function                                                   |
+| ------------------ | ---------------------------------------------------------- |
+| FashionSearchTool  | Search fashion suggestions based on mood/occupation/season |
+| WeatherCheckTool   | Get weather information and suggestions                    |
+| StyleRecommendTool | Get style recommendations and pairing suggestions          |
 
 ### 3.2 Data Sources
 
-| Data Source | Function |
-|-------------|----------|
+| Data Source     | Function                                               |
+| --------------- | ------------------------------------------------------ |
 | FashionDatabase | Fashion database (trending colors, styles, age groups) |
-| UserHistoryDB | User historical recommendation records |
+| UserHistoryDB   | User historical recommendation records                 |
 
 ### 3.3 Private Context
 
@@ -325,7 +325,7 @@ agents:
       - style_recommend
     token_limit: 500
     timeout: 60
-    
+  
   - id: "agent_top"
     category: "top"
     # ...
@@ -340,14 +340,14 @@ agents:
 
 ## 6. Core Features Summary
 
-| Feature | Description |
-|---------|-------------|
+| Feature             | Description                                              |
+| ------------------- | -------------------------------------------------------- |
 | Parallel Processing | 4 Sub Agents process different categories simultaneously |
-| Token Control | Compress instructions, reduce LLM token consumption |
-| Circuit Breaker | Auto trip after 5 LLM failures |
-| Retry Mechanism | Exponential backoff, max 3 retries |
-| RAG | Generate context from historical recommendations |
-| Private Context | Each Agent has independent memory isolation |
-| DLQ | Failed messages enter dead letter queue |
-| Multi-turn | Support user feedback for recommendation adjustment |
-| Result Validation | Field completeness + type + reasonableness check |
+| Token Control       | Compress instructions, reduce LLM token consumption      |
+| Circuit Breaker     | Auto trip after 5 LLM failures                           |
+| Retry Mechanism     | Exponential backoff, max 3 retries                       |
+| RAG                 | Generate context from historical recommendations         |
+| Private Context     | Each Agent has independent memory isolation              |
+| DLQ                 | Failed messages enter dead letter queue                  |
+| Multi-turn          | Support user feedback for recommendation adjustment      |
+| Result Validation   | Field completeness + type + reasonableness check         |
