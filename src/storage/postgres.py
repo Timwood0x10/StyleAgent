@@ -40,13 +40,18 @@ class Database:
         return self._conn
 
     def execute(self, sql: str, params: tuple = None):
-        """Execute SQL"""
+        """Execute SQL and return first row if available (cursor is auto-closed)"""
         cursor = None
         try:
             cursor = self.conn.cursor()
             cursor.execute(sql, params)
             self.conn.commit()
-            return cursor
+            # Fetch result before closing cursor (for RETURNING queries)
+            try:
+                row = cursor.fetchone()
+            except Exception:
+                row = None
+            return row
         except Exception as e:
             logger.error(f"Database execute error: {e}")
             raise
@@ -215,7 +220,7 @@ class StorageLayer:
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
         """
-        cursor = self.db.execute(
+        row = self.db.execute(
             sql,
             (
                 session_id,
@@ -231,7 +236,7 @@ class StorageLayer:
                 profile.get("occasion"),
             ),
         )
-        return cursor.fetchone()[0]
+        return row[0]
 
     def get_user_profile(self, session_id: str) -> Optional[Dict]:
         """Get user profile"""
@@ -273,10 +278,10 @@ class StorageLayer:
             VALUES (%s, %s, %s, %s, %s, %s, %s)
             RETURNING id
         """
-        cursor = self.db.execute(
+        row = self.db.execute(
             sql, (session_id, category, items, colors, styles, reasons, price_range)
         )
-        return cursor.fetchone()[0]
+        return row[0]
 
     def get_outfit_recommendations(self, session_id: str) -> List[Dict]:
         """Get outfit recommendations list"""
@@ -315,10 +320,10 @@ class StorageLayer:
         """
         # pgvector requires array format
         vec_str = "[" + ",".join(str(x) for x in embedding) + "]"
-        cursor = self.db.execute(
+        row = self.db.execute(
             sql, (session_id, content, vec_str, json.dumps(metadata or {}))
         )
-        return cursor.fetchone()[0]
+        return row[0]
 
     def search_similar(
         self, embedding: List[float], session_id: str = None, limit: int = 5
@@ -539,8 +544,7 @@ class StorageLayer:
                 updated_at = NOW()
             RETURNING id
         """
-        cursor = self.db.execute(sql, (session_id, agent_id, json.dumps(context_data)))
-        result = cursor.fetchone()
+        result = self.db.execute(sql, (session_id, agent_id, json.dumps(context_data)))
         return result[0] if result else 0
 
     def get_agent_context(self, session_id: str, agent_id: str) -> Optional[Dict]:

@@ -592,7 +592,16 @@ Only return JSON, no other content.
 
             # Skip PROGRESS messages - they are handled by background thread
             if msg.method == AHPMethod.PROGRESS:
+                progress = msg.payload.get("progress", 0)
+                progress_msg = msg.payload.get("message", "")
+                agent_progress[sender_id] = progress
+                logger.info(
+                    f"Progress from {sender_id}: {progress*100:.0f}% - {progress_msg}"
+                )
                 continue
+
+            # Handle RESULT messages from Sub Agents
+            elif msg.method == AHPMethod.RESULT:
                 result_data = msg.payload.get("result", {})
                 status = msg.payload.get("status", "success")
 
@@ -623,24 +632,6 @@ Only return JSON, no other content.
                     )
 
                 logger.info(f"Received result from {category} (agent: {sender_id})")
-
-            # Handle PROGRESS messages - skip them, do NOT consume from queue
-            # This prevents progress messages from blocking result collection
-            # Sub Agent should send progress to a separate queue or we should use peek
-            elif msg.method == AHPMethod.PROGRESS:
-                # Skip PROGRESS messages - don't consume them
-                # They should be handled by a separate progress listener
-                # For now, just log and continue without consuming
-                progress = msg.payload.get("progress", 0)
-                progress_msg = msg.payload.get("message", "")
-                agent_progress[sender_id] = progress
-                logger.info(
-                    f"Progress from {sender_id}: {progress*100:.0f}% - {progress_msg}"
-                )
-                # Don't break or return - continue the loop to get next message
-                # But we need to avoid infinite loop on PROGRESS messages
-                # Since we can't "un-receive", we'll just continue
-                continue
 
         # Check for missing results and log warnings
         missing = set(pending_tasks.keys()) - received
