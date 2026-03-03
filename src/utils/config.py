@@ -19,7 +19,8 @@ class Config:
     _yaml_config: Dict[str, Any] = {}
     _loaded: bool = False
 
-    def __init__(self):
+    def __init__(self, overrides: Optional[Dict[str, Any]] = None):
+        self._overrides = overrides or {}
         self._load_yaml()
 
     def _load_yaml(self):
@@ -37,14 +38,18 @@ class Config:
         Config._loaded = True
 
     def _get(self, key: str, default: Any = None, env_key: Optional[str] = None) -> Any:
-        """Get config value - yaml first, then .env, then default"""
-        # Try .env first for sensitive data
+        """Get config value - overrides first, then .env, then yaml, then default"""
+        # 1. Check instance overrides (highest priority)
+        if key in self._overrides:
+            return self._overrides[key]
+
+        # 2. Try .env for sensitive data
         if env_key:
             env_val = os.getenv(env_key)
             if env_val is not None:
                 return env_val
 
-        # Try yaml
+        # 3. Try yaml
         keys = key.split(".")
         value: Any = Config._yaml_config
         for k in keys:

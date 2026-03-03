@@ -171,7 +171,9 @@ class RetryHandler:
                 delay = self.get_delay(task_id)
 
                 logger.warning(f"{error.error_type.value}: {error.message}")
-                logger.warning(f"Retry: {task_id} attempt {self._attempts[task_id]}/{self.config.max_retries}, waiting {delay:.1f}s")
+                logger.warning(
+                    f"Retry: {task_id} attempt {self._attempts[task_id]}/{self.config.max_retries}, waiting {delay:.1f}s"
+                )
 
                 time.sleep(delay)
                 last_error = e
@@ -279,7 +281,9 @@ class CircuitBreaker:
 
             if self._failure_count >= self.failure_threshold:
                 self._state = "open"
-                logger.warning(f"Circuit OPEN: {self._failure_count} consecutive failures")
+                logger.warning(
+                    f"Circuit OPEN: {self._failure_count} consecutive failures"
+                )
 
     def can_execute(self) -> bool:
         """Check if execution allowed"""

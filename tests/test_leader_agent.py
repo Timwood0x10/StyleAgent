@@ -147,6 +147,7 @@ class TestAsyncLeaderAgent:
                     # Mock to return empty categories (trigger default) - must be async
                     async def mock_analyze(user_profile):
                         return []
+
                     agent._analyze_required_categories = mock_analyze
 
         profile = UserProfile(
