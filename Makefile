@@ -1,4 +1,4 @@
-.PHONY: help install lint format typecheck test clean
+.PHONY: help install lint format typecheck test clean check-deps
 
 help:
 	@echo "Available commands:"
@@ -8,10 +8,15 @@ help:
 	@echo "  make typecheck    - Run mypy type checker"
 	@echo "  make test         - Run tests"
 	@echo "  make clean        - Clean cache files"
+	@echo "  make check-deps   - Check dependencies with deptry"
+
+check-deps:
+	@echo "Checking dependencies with deptry..."
+	deptry .
 
 install:
 	pip install -r requirements.txt
-	pip install ruff mypy pytest pytest-cov
+	pip install ruff mypy pytest pytest-cov deptry
 
 lint:
 	ruff check src/ tests/ examples/
