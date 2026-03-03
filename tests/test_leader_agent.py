@@ -117,6 +117,157 @@ class TestLeaderAgent:
             assert task.assignee_agent_id.startswith(config.SUB_AGENT_PREFIX)
 
 
+class TestLeaderAgentCoordination:
+    """Test LeaderAgent coordination context for style coordination"""
+
+    def test_coordination_context_build(self):
+        """Test coordination_context is correctly built from results"""
+        from src.core.models import OutfitRecommendation
+
+        mock_llm = MockLocalLLM()
+        with patch("src.agents.leader_agent.StorageLayer"):
+            with patch("src.agents.leader_agent.get_task_registry") as mock_reg:
+                mock_reg.return_value = Mock()
+                with patch("src.agents.leader_agent.get_message_queue"):
+                    agent = LeaderAgent(mock_llm)
+
+        # Simulate Phase 1 results
+        results = {
+            "top": OutfitRecommendation(
+                category="top",
+                items=["cotton T-shirt", "denim jacket"],
+                colors=["navy blue", "white"],
+                styles=["casual", "modern"],
+                reasons=["matches mood"],
+                price_range="¥200-500",
+            ),
+            "bottom": OutfitRecommendation(
+                category="bottom",
+                items=["slim-fit chinos"],
+                colors=["black", "gray"],
+                styles=["formal", "comfortable"],
+                reasons=["matches season"],
+                price_range="¥150-400",
+            ),
+        }
+
+        # Build coordination context
+        coordination_context = {
+            cat: {"items": r.items, "colors": r.colors, "styles": r.styles}
+            for cat, r in results.items()
+        }
+
+        # Verify coordination context structure
+        assert "top" in coordination_context
+        assert "bottom" in coordination_context
+        assert coordination_context["top"]["items"] == ["cotton T-shirt", "denim jacket"]
+        assert coordination_context["top"]["colors"] == ["navy blue", "white"]
+        assert coordination_context["top"]["styles"] == ["casual", "modern"]
+        assert coordination_context["bottom"]["items"] == ["slim-fit chinos"]
+
+    def test_two_phase_dispatch_distinguishes_primary_secondary(self):
+        """Test two-phase dispatch correctly distinguishes primary and secondary categories"""
+        from src.utils.config import config
+
+        mock_llm = MockLocalLLM()
+        with patch("src.agents.leader_agent.StorageLayer"):
+            with patch("src.agents.leader_agent.get_task_registry") as mock_reg:
+                mock_reg.return_value = Mock()
+                with patch("src.agents.leader_agent.get_message_queue"):
+                    agent = LeaderAgent(mock_llm)
+                    agent._analyze_required_categories = Mock(
+                        return_value=["head", "top", "bottom", "shoes"]
+                    )
+
+        profile = UserProfile(
+            name="Test",
+            age=25,
+            gender=Gender.MALE,
+            occupation="engineer",
+            hobbies=["reading"],
+            mood="happy",
+        )
+
+        tasks = agent.create_tasks(profile)
+
+        # Categorize tasks
+        primary_categories = {"top", "bottom"}
+        secondary_categories = {"head", "shoes"}
+
+        primary_tasks = [t for t in tasks if t.category in primary_categories]
+        secondary_tasks = [t for t in tasks if t.category in secondary_categories]
+
+        # Verify primary categories
+        assert len(primary_tasks) == 2
+        primary_cats = {t.category for t in primary_tasks}
+        assert primary_cats == primary_categories
+
+        # Verify secondary categories
+        assert len(secondary_tasks) == 2
+        secondary_cats = {t.category for t in secondary_tasks}
+        assert secondary_cats == secondary_categories
+
+    def test_dispatch_with_coordination_context(self):
+        """Test _dispatch_tasks_via_ahp includes coordination_context in payload"""
+        from src.protocol.ahp import AHPSender
+
+        mock_llm = MockLocalLLM()
+        mock_mq = Mock()
+        mock_sender = Mock()
+
+        with patch("src.agents.leader_agent.StorageLayer"):
+            with patch("src.agents.leader_agent.get_task_registry") as mock_reg:
+                mock_reg.return_value = Mock()
+                with patch("src.agents.leader_agent.get_message_queue", return_value=mock_mq):
+                    agent = LeaderAgent(mock_llm)
+                    agent.sender = mock_sender
+
+        profile = UserProfile(
+            name="TestUser",
+            age=30,
+            gender=Gender.MALE,
+            occupation="designer",
+            hobbies=["gaming"],
+            mood="happy",
+            season="spring",
+            occasion="daily",
+        )
+
+        task = OutfitTask(category="shoes", user_profile=profile)
+        task.assignee_agent_id = "agent_shoes"
+        task.task_id = "test-task-id"
+
+        coordination_context = {
+            "top": {
+                "items": ["cotton T-shirt"],
+                "colors": ["navy blue"],
+                "styles": ["casual"],
+            },
+            "bottom": {
+                "items": ["jeans"],
+                "colors": ["blue"],
+                "styles": ["casual"],
+            },
+        }
+
+        # Call dispatch with coordination context
+        agent._dispatch_tasks_via_ahp(
+            [task], profile, coordination_context=coordination_context
+        )
+
+        # Verify sender was called
+        assert mock_sender.send_task.called
+
+        # Get the payload that was sent
+        call_args = mock_sender.send_task.call_args
+        payload = call_args.kwargs.get("payload") or call_args[1].get("payload")
+
+        # Verify coordination_context is in payload
+        assert "coordination_context" in payload
+        assert payload["coordination_context"]["top"]["items"] == ["cotton T-shirt"]
+        assert payload["coordination_context"]["bottom"]["colors"] == ["blue"]
+
+
 class TestAsyncLeaderAgent:
     """Test AsyncLeaderAgent"""
 
