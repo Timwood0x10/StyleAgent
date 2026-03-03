@@ -252,8 +252,12 @@ class TestOutfitSubAgent:
                     # Verify the call was successful (no error status)
                     call_args = mock_sender.send_result.call_args
                     # Check if status is "success"
-                    status = call_args.kwargs.get("status") or (call_args[0][3] if len(call_args[0]) > 3 else None)
-                    assert status == "success" or call_args[1].get("status") == "success"
+                    status = call_args.kwargs.get("status") or (
+                        call_args[0][3] if len(call_args[0]) > 3 else None
+                    )
+                    assert (
+                        status == "success" or call_args[1].get("status") == "success"
+                    )
 
 
 class TestAsyncOutfitSubAgent:
@@ -366,9 +370,7 @@ class TestStyleCoordinationIntegration:
                     )
 
                     # Call _recommend with coordination context
-                    result = agent._recommend(
-                        profile, "", coordination_context
-                    )
+                    result = agent._recommend(profile, "", coordination_context)
 
                     # The result should be generated (LLM was called)
                     assert result is not None

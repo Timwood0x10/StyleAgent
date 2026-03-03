@@ -160,7 +160,10 @@ class TestLeaderAgentCoordination:
         # Verify coordination context structure
         assert "top" in coordination_context
         assert "bottom" in coordination_context
-        assert coordination_context["top"]["items"] == ["cotton T-shirt", "denim jacket"]
+        assert coordination_context["top"]["items"] == [
+            "cotton T-shirt",
+            "denim jacket",
+        ]
         assert coordination_context["top"]["colors"] == ["navy blue", "white"]
         assert coordination_context["top"]["styles"] == ["casual", "modern"]
         assert coordination_context["bottom"]["items"] == ["slim-fit chinos"]
@@ -218,7 +221,9 @@ class TestLeaderAgentCoordination:
         with patch("src.agents.leader_agent.StorageLayer"):
             with patch("src.agents.leader_agent.get_task_registry") as mock_reg:
                 mock_reg.return_value = Mock()
-                with patch("src.agents.leader_agent.get_message_queue", return_value=mock_mq):
+                with patch(
+                    "src.agents.leader_agent.get_message_queue", return_value=mock_mq
+                ):
                     agent = LeaderAgent(mock_llm)
                     agent.sender = mock_sender
 

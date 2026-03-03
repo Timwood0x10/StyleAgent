@@ -188,6 +188,20 @@ class StorageLayer:
             updated_at TIMESTAMP DEFAULT NOW(),
             UNIQUE(session_id, agent_id)
         );
+
+        -- Memory distillation summaries (持久化蒸馏后的记忆)
+        CREATE TABLE IF NOT EXISTS memory_summaries (
+            id SERIAL PRIMARY KEY,
+            session_id UUID NOT NULL,
+            agent_id VARCHAR(50) NOT NULL,
+            summary TEXT NOT NULL,
+            original_token_count INT,
+            compressed_token_count INT,
+            embedding vector(1536),
+            metadata JSONB,
+            created_at TIMESTAMP DEFAULT NOW(),
+            updated_at TIMESTAMP DEFAULT NOW()
+        );
         
         -- Task progress history table
         CREATE TABLE IF NOT EXISTS task_progress (
@@ -208,6 +222,8 @@ class StorageLayer:
         CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
         CREATE INDEX IF NOT EXISTS idx_contexts_session_agent ON agent_contexts(session_id, agent_id);
         CREATE INDEX IF NOT EXISTS idx_progress_task ON task_progress(task_id);
+        CREATE INDEX IF NOT EXISTS idx_memory_session_agent ON memory_summaries(session_id, agent_id);
+        CREATE INDEX IF NOT EXISTS idx_memory_embedding ON memory_summaries USING hnsw (embedding vector_cosine_ops);
         """
         self.db.execute(sql)
 
@@ -603,6 +619,162 @@ class StorageLayer:
                     "progress": row[3],
                     "message": row[4],
                     "created_at": row[5],
+                }
+            )
+        return results
+
+    # ========== Memory Distillation / 记忆蒸馏 ==========
+    def save_distilled_memory(
+        self,
+        session_id: str,
+        agent_id: str,
+        summary: str,
+        original_token_count: int = None,
+        compressed_token_count: int = None,
+        embedding: List[float] = None,
+        metadata: Dict = None,
+    ):
+        """保存蒸馏后的记忆"""
+        sql = """
+            INSERT INTO memory_summaries 
+            (session_id, agent_id, summary, original_token_count, compressed_token_count, embedding, metadata, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+            ON CONFLICT (session_id, agent_id) 
+            DO UPDATE SET summary = EXCLUDED.summary, 
+                          original_token_count = EXCLUDED.original_token_count,
+                          compressed_token_count = EXCLUDED.compressed_token_count,
+                          embedding = EXCLUDED.embedding,
+                          metadata = EXCLUDED.metadata,
+                          updated_at = NOW()
+        """
+        # 将 embedding 转换为 PostgreSQL 数组格式
+        embedding_arr = None
+        if embedding:
+            embedding_arr = "[" + ",".join(map(str, embedding)) + "]"
+
+        metadata_json = json.dumps(metadata) if metadata else None
+
+        self.db.execute(
+            sql,
+            (
+                session_id,
+                agent_id,
+                summary,
+                original_token_count,
+                compressed_token_count,
+                embedding_arr,
+                metadata_json,
+            ),
+        )
+
+    def get_distilled_memories(
+        self, session_id: str, agent_id: str = None, limit: int = 5
+    ) -> List[Dict]:
+        """获取蒸馏记忆列表"""
+        if agent_id:
+            sql = """
+                SELECT id, session_id, agent_id, summary, original_token_count, 
+                       compressed_token_count, metadata, created_at, updated_at
+                FROM memory_summaries 
+                WHERE session_id = %s AND agent_id = %s
+                ORDER BY updated_at DESC
+                LIMIT %s
+            """
+            rows = self.db.fetch_all(sql, (session_id, agent_id, limit))
+        else:
+            sql = """
+                SELECT id, session_id, agent_id, summary, original_token_count, 
+                       compressed_token_count, metadata, created_at, updated_at
+                FROM memory_summaries 
+                WHERE session_id = %s
+                ORDER BY updated_at DESC
+                LIMIT %s
+            """
+            rows = self.db.fetch_all(sql, (session_id, limit))
+
+        results = []
+        for row in rows:
+            results.append(
+                {
+                    "id": row[0],
+                    "session_id": row[1],
+                    "agent_id": row[2],
+                    "summary": row[3],
+                    "original_token_count": row[4],
+                    "compressed_token_count": row[5],
+                    "metadata": row[6],
+                    "created_at": row[7],
+                    "updated_at": row[8],
+                }
+            )
+        return results
+
+    def search_similar_memories(
+        self,
+        embedding: List[float],
+        agent_id: str = None,
+        limit: int = 3,
+        match_threshold: float = 0.7,
+    ) -> List[Dict]:
+        """搜索相似记忆（向量检索）"""
+        embedding_arr = "[" + ",".join(map(str, embedding)) + "]"
+
+        if agent_id:
+            sql = """
+                SELECT id, session_id, agent_id, summary, original_token_count, 
+                       compressed_token_count, metadata, created_at, updated_at,
+                       1 - (embedding <=> %s::vector) as similarity
+                FROM memory_summaries 
+                WHERE agent_id = %s AND embedding <=> %s::vector < %s
+                ORDER BY embedding <=> %s::vector
+                LIMIT %s
+            """
+            rows = self.db.fetch_all(
+                sql,
+                (
+                    embedding_arr,
+                    agent_id,
+                    embedding_arr,
+                    1 - match_threshold,
+                    embedding_arr,
+                    limit,
+                ),
+            )
+        else:
+            sql = """
+                SELECT id, session_id, agent_id, summary, original_token_count, 
+                       compressed_token_count, metadata, created_at, updated_at,
+                       1 - (embedding <=> %s::vector) as similarity
+                FROM memory_summaries 
+                WHERE embedding <=> %s::vector < %s
+                ORDER BY embedding <=> %s::vector
+                LIMIT %s
+            """
+            rows = self.db.fetch_all(
+                sql,
+                (
+                    embedding_arr,
+                    embedding_arr,
+                    1 - match_threshold,
+                    embedding_arr,
+                    limit,
+                ),
+            )
+
+        results = []
+        for row in rows:
+            results.append(
+                {
+                    "id": row[0],
+                    "session_id": row[1],
+                    "agent_id": row[2],
+                    "summary": row[3],
+                    "original_token_count": row[4],
+                    "compressed_token_count": row[5],
+                    "metadata": row[6],
+                    "created_at": row[7],
+                    "updated_at": row[8],
+                    "similarity": row[9],
                 }
             )
         return results
