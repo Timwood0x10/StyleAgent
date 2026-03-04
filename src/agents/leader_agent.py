@@ -20,7 +20,7 @@ from ..core.validator import ResultValidator, ValidationLevel
 from ..core.registry import TaskRegistry, get_task_registry, TaskStatus
 from ..core.errors import RetryHandler, RetryConfig, ErrorType, CircuitBreaker
 from ..utils.context import SessionMemory
-from ..utils.llm import LocalLLM
+from ..utils.llm import LocalLLM, parse_json_response
 from ..utils import get_logger
 from ..utils.config import config
 from ..protocol import get_message_queue, AHPSender, AHPError, AHPErrorCode, AHPMethod
@@ -258,10 +258,8 @@ Return ONLY JSON array like ["head", "top"], no other text.
                 return []
 
             # Parse response
-            start = response.find("[")
-            end = response.rfind("]") + 1
-            if start >= 0 and end > start:
-                categories = json.loads(response[start:end])
+            categories = parse_json_response(response, expect_list=True)
+            if categories and isinstance(categories, list):
                 # Validate categories
                 valid_categories = {"head", "top", "bottom", "shoes"}
                 categories = [c for c in categories if c in valid_categories]
@@ -413,10 +411,8 @@ Only return JSON, no other content.
         )
 
         try:
-            start = response.find("{")
-            end = response.rfind("}") + 1
-            if start >= 0 and end > start:
-                data = json.loads(response[start:end])
+            data = parse_json_response(response)
+            if data and isinstance(data, dict):
                 return UserProfile(
                     name=data.get("name", "User"),
                     gender=Gender(data.get("gender", "male")),
@@ -665,8 +661,7 @@ Only return JSON, no other content.
                     break
 
             # Receive any message, not specific to any agent
-            msg = self.mq.receive("leader", timeout=2)
-
+            msg = self.mq.receive("leader", timeout=config.AHP_MESSAGE_TIMEOUT)
             if msg is None:
                 continue
 
@@ -871,10 +866,8 @@ Return JSON format:
         )
 
         try:
-            start = response.find("{")
-            end = response.rfind("}") + 1
-            if start >= 0 and end > start:
-                data = json.loads(response[start:end])
+            data = parse_json_response(response)
+            if data and isinstance(data, dict):
                 result = OutfitResult(
                     session_id=self.session_id,
                     user_profile=user_profile,
@@ -1152,10 +1145,8 @@ Please return JSON in the following format:
 
         try:
             response = await self.llm.ainvoke(prompt, SYSTEM_PROMPT)
-            start = response.find("{")
-            end = response.rfind("}") + 1
-            if start >= 0 and end > start:
-                data = json.loads(response[start:end])
+            data = parse_json_response(response)
+            if data and isinstance(data, dict):
                 return UserProfile(
                     name=data.get("name", "User"),
                     gender=Gender(data.get("gender", "male")),
@@ -1241,10 +1232,8 @@ Return ONLY JSON array like ["head", "top"], no other text.
             if not response:
                 return []
 
-            start = response.find("[")
-            end = response.rfind("]") + 1
-            if start >= 0 and end > start:
-                categories = json.loads(response[start:end])
+            categories = parse_json_response(response, expect_list=True)
+            if categories and isinstance(categories, list):
                 valid_categories = {"head", "top", "bottom", "shoes"}
                 categories = [c for c in categories if c in valid_categories]
                 if categories:
@@ -1343,7 +1332,7 @@ Return ONLY JSON array like ["head", "top"], no other text.
             mq = self.mq
             if mq is None:
                 break
-            msg = await mq.receive("leader", timeout=2)
+            msg = await mq.receive("leader", timeout=config.AHP_MESSAGE_TIMEOUT)
 
             if msg is None:
                 continue
@@ -1402,10 +1391,8 @@ Please provide:
 
         try:
             response = await self.llm.ainvoke(style_prompt, SYSTEM_PROMPT)
-            start = response.find("{")
-            end = response.rfind("}") + 1
-            if start >= 0 and end > start:
-                data = json.loads(response[start:end])
+            data = parse_json_response(response)
+            if data and isinstance(data, dict):
                 result = OutfitResult(
                     session_id=self.session_id,
                     user_profile=user_profile,

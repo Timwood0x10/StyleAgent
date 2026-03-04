@@ -13,7 +13,7 @@ from ..core.models import (
     TaskStatus,
     Gender,
 )
-from ..utils.llm import LocalLLM
+from ..utils.llm import LocalLLM, parse_json_response
 from ..utils import get_logger
 from ..protocol import get_message_queue, AHPReceiver, AHPSender, AHPError, AHPErrorCode
 from ..storage.postgres import StorageLayer
@@ -547,10 +547,8 @@ Only return JSON.
     def _parse_response(self, response: str) -> OutfitRecommendation:
         """Parse response"""
         try:
-            start = response.find("{")
-            end = response.rfind("}") + 1
-            if start >= 0 and end > start:
-                data = json.loads(response[start:end])
+            data = parse_json_response(response)
+            if data and isinstance(data, dict):
                 return OutfitRecommendation(
                     category=data.get("category", self.category),
                     items=data.get("items", []),
@@ -784,10 +782,8 @@ class AsyncOutfitSubAgent:
     def _parse_response(self, response: str) -> OutfitRecommendation:
         """Parse response"""
         try:
-            start = response.find("{")
-            end = response.rfind("}") + 1
-            if start >= 0 and end > start:
-                data = json.loads(response[start:end])
+            data = parse_json_response(response)
+            if data and isinstance(data, dict):
                 return OutfitRecommendation(
                     category=data.get("category", self.category),
                     items=data.get("items", []),
