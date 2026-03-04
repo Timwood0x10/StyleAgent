@@ -57,7 +57,13 @@ class OutfitSubAgent:
 
     DEFAULT_MAX_LOOPS = 100  # Default maximum loop iterations
 
-    def __init__(self, agent_id: str, category: str, llm: LocalLLM, max_loops: int = DEFAULT_MAX_LOOPS):
+    def __init__(
+        self,
+        agent_id: str,
+        category: str,
+        llm: LocalLLM,
+        max_loops: int = DEFAULT_MAX_LOOPS,
+    ):
         self.agent_id = agent_id
         self.category = category
         self.llm = llm
@@ -123,7 +129,9 @@ class OutfitSubAgent:
 
         # Exit loop when stopped or max loops reached
         if self._loop_count >= self._max_loops:
-            logger.warning(f"{self.agent_id} reached max loops ({self._max_loops}), stopping")
+            logger.warning(
+                f"{self.agent_id} reached max loops ({self._max_loops}), stopping"
+            )
         self._running = False
 
     def _handle_task(self, msg):
@@ -161,7 +169,9 @@ class OutfitSubAgent:
             )
             # Get compact_instruction from payload (token control)
             compact_instruction = payload.get("compact_instruction", "")
-            result = self._recommend(profile, compact_instruction)
+            # Get coordination context from payload (for style coordination)
+            coordination_context = payload.get("coordination_context", {})
+            result = self._recommend(profile, compact_instruction, coordination_context)
 
             self.sender.send_progress("leader", task_id, session_id, 0.9, "Completed")
 
@@ -295,9 +305,15 @@ class OutfitSubAgent:
         return None
 
     def _recommend(
-        self, user_profile: UserProfile, compact_instruction: str = ""
+        self,
+        user_profile: UserProfile,
+        compact_instruction: str = "",
+        coordination_context: dict = None,
     ) -> OutfitRecommendation:
-        """Execute recommendation with tools and RAG"""
+        """Execute recommendation with tools, RAG and coordination context"""
+
+        if coordination_context is None:
+            coordination_context = {}
 
         # Use tools to get additional context
         from .resources import AgentResourceFactory
@@ -336,7 +352,7 @@ class OutfitSubAgent:
         # RAG: Search similar historical recommendations
         rag_context = self._get_rag_context(user_profile)
 
-        # Build enhanced prompt with tool results, compact_instruction and RAG context
+        # Build enhanced prompt with tool results, compact_instruction, coordination context and RAG context
         prompt = self._build_prompt(
             user_profile,
             fashion_info,
@@ -344,6 +360,7 @@ class OutfitSubAgent:
             style_info,
             compact_instruction,
             rag_context,
+            coordination_context,
         )
 
         # Execute LLM call with circuit breaker
@@ -364,8 +381,9 @@ class OutfitSubAgent:
         style_info: dict = None,
         compact_instruction: str = "",
         rag_context: str = "",
+        coordination_context: dict = None,
     ) -> str:
-        """Build prompt with tool results and RAG context"""
+        """Build prompt with tool results, RAG context and coordination context"""
 
         category_names = {
             "head": "head accessories (hats, glasses, necklaces, earrings, etc.)",
@@ -424,7 +442,25 @@ class OutfitSubAgent:
         if rag_context:
             rag_section = f"\n[Historical Similar Recommendations - for reference]:\n{rag_context}\n"
 
-        prompt = f"""{compact_section}{rag_section}
+        # Include coordination context from previously recommended categories
+        coord_section = ""
+        if coordination_context:
+            coord_parts = []
+            for cat, info in coordination_context.items():
+                items = info.get("items", [])
+                colors = info.get("colors", [])
+                styles = info.get("styles", [])
+                coord_parts.append(
+                    f"- {cat}: items={', '.join(items[:3])}, colors={', '.join(colors)}, styles={', '.join(styles)}"
+                )
+            if coord_parts:
+                coord_section = (
+                    f"\n[Already Recommended Categories - please coordinate with these]:\n"
+                    + "\n".join(coord_parts)
+                    + "\n"
+                )
+
+        prompt = f"""{compact_section}{rag_section}{coord_section}
 User Info:
 {user_profile.to_prompt_context()}
 {tool_context}
@@ -503,7 +539,13 @@ class AsyncOutfitSubAgent:
 
     DEFAULT_MAX_LOOPS = 100  # Default maximum loop iterations
 
-    def __init__(self, agent_id: str, category: str, llm: LocalLLM, max_loops: int = DEFAULT_MAX_LOOPS):
+    def __init__(
+        self,
+        agent_id: str,
+        category: str,
+        llm: LocalLLM,
+        max_loops: int = DEFAULT_MAX_LOOPS,
+    ):
         self.agent_id = agent_id
         self.category = category
         self.llm = llm
@@ -519,6 +561,7 @@ class AsyncOutfitSubAgent:
         self._loop_count = 0
         self._max_loops = max_loops
         self._task: Optional[asyncio.Task] = None
+        self._db: Optional[StorageLayer] = None
 
     async def start(self):
         """Start async agent"""
@@ -542,6 +585,49 @@ class AsyncOutfitSubAgent:
                 pass
         logger.info(f"Async {self.agent_id} stopped")
 
+    def _get_db(self) -> StorageLayer:
+        """Lazy init database connection"""
+        if self._db is None:
+            self._db = StorageLayer()
+        return self._db
+
+    def _build_rag_query(self, user_profile: UserProfile) -> str:
+        """Build query text for RAG embedding"""
+        return (
+            f"Recommend {self.category} for user who is {user_profile.gender.value}, "
+            f"age {user_profile.age}, occupation {user_profile.occupation}, "
+            f"mood {user_profile.mood}, season {user_profile.season}, "
+            f"occasion {user_profile.occasion}, budget {user_profile.budget}"
+        )
+
+    def _get_rag_context(self, user_profile: UserProfile, limit: int = 3) -> str:
+        """Get RAG context from historical recommendations (sync version for async agent)"""
+        try:
+            query_text = self._build_rag_query(user_profile)
+            embedding = self.llm.embed(query_text)
+            db = self._get_db()
+            similar_results = db.search_similar(
+                embedding=embedding,
+                session_id=None,
+                limit=limit,
+            )
+            if not similar_results:
+                return ""
+            context_parts = []
+            for i, result in enumerate(similar_results, 1):
+                content = result.get("content", "")
+                metadata = result.get("metadata", {})
+                if content:
+                    context_parts.append(
+                        f"- Similar recommendation {i}: {content} "
+                        f"(mood: {metadata.get('mood', 'N/A')}, "
+                        f"season: {metadata.get('season', 'N/A')})"
+                    )
+            return "\n".join(context_parts)
+        except Exception as e:
+            logger.warning(f"RAG context retrieval failed: {e}")
+            return ""
+
     async def _run_loop(self):
         """Main async loop"""
         while self._running and self._loop_count < self._max_loops:
@@ -564,7 +650,9 @@ class AsyncOutfitSubAgent:
 
         # Exit loop when stopped or max loops reached
         if self._loop_count >= self._max_loops:
-            logger.warning(f"Async {self.agent_id} reached max loops ({self._max_loops}), stopping")
+            logger.warning(
+                f"Async {self.agent_id} reached max loops ({self._max_loops}), stopping"
+            )
         self._running = False
 
     async def _handle_task(self, msg):
@@ -604,7 +692,11 @@ class AsyncOutfitSubAgent:
             )
             # Get compact_instruction from payload (token control)
             compact_instruction = payload.get("compact_instruction", "")
-            result = await self._recommend(profile, compact_instruction)
+            # Get coordination context from payload (for style coordination)
+            coordination_context = payload.get("coordination_context", {})
+            result = await self._recommend(
+                profile, compact_instruction, coordination_context
+            )
 
             await self.sender.send_progress(
                 "leader", task_id, session_id, 0.9, "Completed"
@@ -662,9 +754,15 @@ class AsyncOutfitSubAgent:
         )
 
     async def _recommend(
-        self, user_profile: UserProfile, compact_instruction: str = ""
+        self,
+        user_profile: UserProfile,
+        compact_instruction: str = "",
+        coordination_context: dict = None,
     ) -> OutfitRecommendation:
-        """Execute recommendation (async) with tools"""
+        """Execute recommendation (async) with tools and coordination context"""
+
+        if coordination_context is None:
+            coordination_context = {}
         from .resources import AgentResourceFactory
 
         resources = AgentResourceFactory.create_for_category(
@@ -698,9 +796,18 @@ class AsyncOutfitSubAgent:
             budget=user_profile.budget,
         )
 
-        # Build enhanced prompt with compact_instruction
+        # Get RAG context (sync call in async context)
+        rag_context = self._get_rag_context(user_profile)
+
+        # Build enhanced prompt with compact_instruction and coordination context
         prompt = self._build_prompt(
-            user_profile, fashion_info, weather_info, style_info, compact_instruction
+            user_profile,
+            fashion_info,
+            weather_info,
+            style_info,
+            compact_instruction,
+            rag_context,
+            coordination_context,
         )
         response = await self.llm.ainvoke(prompt, self.system_prompt)
         return self._parse_response(response)
@@ -712,8 +819,13 @@ class AsyncOutfitSubAgent:
         weather_info: dict = None,
         style_info: dict = None,
         compact_instruction: str = "",
+        rag_context: str = "",
+        coordination_context: dict = None,
     ) -> str:
-        """Build prompt with tool results"""
+        """Build prompt with tool results, RAG context and coordination context"""
+
+        if coordination_context is None:
+            coordination_context = {}
         category_names = {
             "head": "head accessories (hats, glasses, necklaces, earrings, etc.)",
             "top": "tops (T-shirts, shirts, jackets, hoodies, etc.)",
@@ -763,12 +875,37 @@ class AsyncOutfitSubAgent:
 
         # Add compact instruction context if provided (token control)
         compact_ctx = (
-            f"\nCompact Instruction: {compact_instruction}\n"
+            f"\n[Compact Instruction]: {compact_instruction}\n"
             if compact_instruction
             else ""
         )
 
-        prompt = f"""{compact_ctx}User Info:
+        # Add RAG context if provided
+        rag_ctx = (
+            f"\n[Historical Similar Recommendations]: {rag_context}\n"
+            if rag_context
+            else ""
+        )
+
+        # Add coordination context from previously recommended categories
+        coord_ctx = ""
+        if coordination_context:
+            coord_parts = []
+            for cat, info in coordination_context.items():
+                items = info.get("items", [])
+                colors = info.get("colors", [])
+                styles = info.get("styles", [])
+                coord_parts.append(
+                    f"- {cat}: items={', '.join(items[:3])}, colors={', '.join(colors)}, styles={', '.join(styles)}"
+                )
+            if coord_parts:
+                coord_ctx = (
+                    "\n[Already Recommended Categories - please coordinate with these]:\n"
+                    + "\n".join(coord_parts)
+                    + "\n"
+                )
+
+        prompt = f"""{compact_ctx}{rag_ctx}{coord_ctx}User Info:
 {user_profile.to_prompt_context()}
 {tool_context}
 

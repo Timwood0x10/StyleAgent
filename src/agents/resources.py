@@ -263,21 +263,46 @@ class FashionDatabase(BaseDataSource):
 
 
 class UserHistoryDB(BaseDataSource):
-    """User history data source"""
+    """User history data source with optional persistence via StorageLayer"""
 
-    def __init__(self):
+    def __init__(self, storage=None):
         super().__init__("user_history")
         self._history: Dict[str, List[Dict]] = {}
+        self._storage = storage  # Optional StorageLayer instance
 
     def query(self, session_id: Optional[str] = None, **kwargs) -> List[Dict]:
-        if session_id:
-            return self._history.get(session_id, [])
+        if not session_id:
+            return []
+        # Check memory cache first
+        if session_id in self._history:
+            return self._history[session_id]
+        # Try loading from DB
+        if self._storage:
+            try:
+                ctx = self._storage.get_agent_context(session_id, "user_history")
+                if ctx and ctx.get("context_data"):
+                    records = ctx["context_data"].get("records", [])
+                    self._history[session_id] = records
+                    return records
+            except Exception as e:
+                logger.warning(f"Failed to load history from DB: {e}")
         return []
 
     def add_record(self, session_id: str, record: Dict):
+        # Write to memory
         if session_id not in self._history:
             self._history[session_id] = []
         self._history[session_id].append(record)
+        # Persist to DB
+        if self._storage:
+            try:
+                self._storage.save_agent_context(
+                    session_id,
+                    "user_history",
+                    {"records": self._history[session_id]},
+                )
+            except Exception as e:
+                logger.warning(f"Failed to persist history to DB: {e}")
 
 
 # ========== Private Context ==========
@@ -401,7 +426,7 @@ class AgentResourceFactory:
 
         # Add data sources
         resources.add_data_source(FashionDatabase())
-        resources.add_data_source(UserHistoryDB())
+        resources.add_data_source(UserHistoryDB(storage=storage))
 
         # Create private context
         resources.private_context = PrivateContext(resources.agent_id, storage)

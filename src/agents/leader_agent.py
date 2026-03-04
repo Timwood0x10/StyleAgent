@@ -8,7 +8,7 @@ import queue
 import threading
 import time
 import uuid
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 from ..core.models import (
     UserProfile,
     Gender,
@@ -19,6 +19,7 @@ from ..core.models import (
 from ..core.validator import ResultValidator, ValidationLevel
 from ..core.registry import TaskRegistry, get_task_registry, TaskStatus
 from ..core.errors import RetryHandler, RetryConfig, ErrorType, CircuitBreaker
+from ..utils.context import SessionMemory
 from ..utils.llm import LocalLLM
 from ..utils import get_logger
 from ..utils.config import config
@@ -53,6 +54,9 @@ class LeaderAgent:
         self.validator = ResultValidator(level=ValidationLevel.NORMAL)
         self.registry = get_task_registry()
         self._db = StorageLayer()  # For RAG vector storage
+
+        # Initialize session memory for distillation
+        self.session_memory: Optional[SessionMemory] = None
 
         # Initialize retry handler
         retry_config = RetryConfig(
@@ -278,11 +282,37 @@ Return ONLY JSON array like ["head", "top"], no other text.
         # 0. Generate session ID
         self.session_id = str(uuid.uuid4())
 
+        # 0.5. Save session to DB
+        try:
+            self._db.save_session(self.session_id, user_input)
+        except Exception as e:
+            logger.warning(f"Failed to save session: {e}")
+
         # 1. Parse user profile
         logger.info("Parsing user profile")
         profile = self.parse_user_profile(user_input)
 
-        # 1.5. Load user context from previous sessions (context awareness)
+        # 1.5. Save user profile to DB
+        try:
+            self._db.save_user_profile(
+                self.session_id,
+                {
+                    "name": profile.name,
+                    "gender": profile.gender.value,
+                    "age": profile.age,
+                    "occupation": profile.occupation,
+                    "hobbies": profile.hobbies,
+                    "mood": profile.mood,
+                    "style_preference": profile.style_preference,
+                    "budget": profile.budget,
+                    "season": profile.season,
+                    "occasion": profile.occasion,
+                },
+            )
+        except Exception as e:
+            logger.warning(f"Failed to save user profile: {e}")
+
+        # 1.6. Load user context from previous sessions (context awareness)
         logger.info("Loading user context from history")
         profile = self._enrich_user_context(profile, user_input)
 
@@ -290,17 +320,65 @@ Return ONLY JSON array like ["head", "top"], no other text.
         logger.info("Creating outfit tasks")
         tasks = self.create_tasks(profile)
 
-        # 3. Dispatch tasks to Sub Agents via AHP
-        logger.info("Dispatching tasks via AHP protocol")
-        self._dispatch_tasks_via_ahp(tasks, profile)
+        # 3. Two-phase dispatch for style coordination
+        # Phase 1: Primary categories (top + bottom) - the outfit core
+        primary_categories = {"top", "bottom"}
+        primary_tasks = [t for t in tasks if t.category in primary_categories]
+        secondary_tasks = [t for t in tasks if t.category not in primary_categories]
 
-        # 4. Collect results
-        logger.info("Waiting for Sub Agent results")
-        results = self._collect_results(tasks)
+        results: Dict[str, OutfitRecommendation] = {}
+
+        if primary_tasks:
+            logger.info("Phase 1: Dispatching primary tasks (top + bottom)")
+            self._dispatch_tasks_via_ahp(primary_tasks, profile)
+            primary_results = self._collect_results(primary_tasks)
+            results.update(primary_results)
+
+        # Phase 2: Secondary categories (head + shoes) with coordination context
+        if secondary_tasks:
+            coordination_context = {
+                cat: {"items": r.items, "colors": r.colors, "styles": r.styles}
+                for cat, r in results.items()
+            }
+            logger.info(
+                f"Phase 2: Dispatching secondary tasks with coordination context: {list(coordination_context.keys())}"
+            )
+            self._dispatch_tasks_via_ahp(
+                secondary_tasks, profile, coordination_context=coordination_context
+            )
+            secondary_results = self._collect_results(secondary_tasks)
+            results.update(secondary_results)
+
+        # 4.5. Save each recommendation to DB
+        for category, rec in results.items():
+            try:
+                self._db.save_outfit_recommendation(
+                    session_id=self.session_id,
+                    category=category,
+                    items=rec.items,
+                    colors=rec.colors,
+                    styles=rec.styles,
+                    reasons=rec.reasons,
+                    price_range=rec.price_range,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to save recommendation for {category}: {e}")
 
         # 5. Aggregate
         logger.info("Aggregating results")
         final = self.aggregate_results(profile, results)
+
+        # 5.5. Update session status
+        try:
+            self._db.update_session(
+                self.session_id,
+                final_output=final.to_display(),
+                summary=final.summary,
+                status="completed",
+            )
+        except Exception as e:
+            logger.warning(f"Failed to update session: {e}")
+
         return final
 
     def parse_user_profile(self, user_input: str) -> UserProfile:
@@ -472,8 +550,13 @@ Only return JSON, no other content.
         self.tasks = tasks
         return tasks
 
-    def _dispatch_tasks_via_ahp(self, tasks: List[OutfitTask], profile: UserProfile):
-        """Dispatch tasks via AHP protocol with error handling"""
+    def _dispatch_tasks_via_ahp(
+        self,
+        tasks: List[OutfitTask],
+        profile: UserProfile,
+        coordination_context: Dict[str, Any] = None,
+    ):
+        """Dispatch tasks via AHP protocol with error handling and optional coordination context"""
 
         # Category description mapping
         category_desc = {
@@ -501,6 +584,10 @@ Only return JSON, no other content.
                 },
                 "instruction": f"Please recommend {desc} for {profile.name}, considering their mood is {profile.mood}",
             }
+
+            # Inject coordination context from earlier phases
+            if coordination_context:
+                payload["coordination_context"] = coordination_context
 
             # Send via AHP protocol with error handling
             try:
@@ -570,7 +657,7 @@ Only return JSON, no other content.
                     progress_msg = msg.payload.get("message", "")
                     agent_progress[sender_id] = progress
                     logger.info(
-                        f"Progress from {sender_id}: {progress*100:.0f}% - {progress_msg}"
+                        f"Progress from {sender_id}: {progress * 100:.0f}% - {progress_msg}"
                     )
                 except queue.Empty:
                     break
@@ -592,7 +679,16 @@ Only return JSON, no other content.
 
             # Skip PROGRESS messages - they are handled by background thread
             if msg.method == AHPMethod.PROGRESS:
+                progress = msg.payload.get("progress", 0)
+                progress_msg = msg.payload.get("message", "")
+                agent_progress[sender_id] = progress
+                logger.info(
+                    f"Progress from {sender_id}: {progress * 100:.0f}% - {progress_msg}"
+                )
                 continue
+
+            # Handle RESULT messages from Sub Agents
+            elif msg.method == AHPMethod.RESULT:
                 result_data = msg.payload.get("result", {})
                 status = msg.payload.get("status", "success")
 
@@ -623,24 +719,6 @@ Only return JSON, no other content.
                     )
 
                 logger.info(f"Received result from {category} (agent: {sender_id})")
-
-            # Handle PROGRESS messages - skip them, do NOT consume from queue
-            # This prevents progress messages from blocking result collection
-            # Sub Agent should send progress to a separate queue or we should use peek
-            elif msg.method == AHPMethod.PROGRESS:
-                # Skip PROGRESS messages - don't consume them
-                # They should be handled by a separate progress listener
-                # For now, just log and continue without consuming
-                progress = msg.payload.get("progress", 0)
-                progress_msg = msg.payload.get("message", "")
-                agent_progress[sender_id] = progress
-                logger.info(
-                    f"Progress from {sender_id}: {progress*100:.0f}% - {progress_msg}"
-                )
-                # Don't break or return - continue the loop to get next message
-                # But we need to avoid infinite loop on PROGRESS messages
-                # Since we can't "un-receive", we'll just continue
-                continue
 
         # Check for missing results and log warnings
         missing = set(pending_tasks.keys()) - received
@@ -931,10 +1009,47 @@ class AsyncLeaderAgent:
         logger.info("Async Leader Agent starting processing")
         logger.debug(f"User input: {user_input}")
 
+        self.session_id = str(uuid.uuid4())
+
+        # Initialize session memory for this session
+        self.session_memory = SessionMemory(
+            session_id=self.session_id,
+            llm=self.llm,
+            storage=self._db,
+            agent_id="leader",
+        )
+        # Add user input to memory
+        self.session_memory.add_user_turn(user_input, "")
+
+        # 0.5. Save session to DB
+        try:
+            self._db.save_session(self.session_id, user_input)
+        except Exception as e:
+            logger.warning(f"Failed to save session: {e}")
+
         # 1. Parse user profile
         logger.info("Parsing user profile (async)")
         profile = await self._parse_user_profile(user_input)
-        self.session_id = str(uuid.uuid4())
+
+        # 1.5. Save user profile to DB
+        try:
+            self._db.save_user_profile(
+                self.session_id,
+                {
+                    "name": profile.name,
+                    "gender": profile.gender.value,
+                    "age": profile.age,
+                    "occupation": profile.occupation,
+                    "hobbies": profile.hobbies,
+                    "mood": profile.mood,
+                    "style_preference": getattr(profile, "style_preference", ""),
+                    "budget": profile.budget,
+                    "season": profile.season,
+                    "occasion": profile.occasion,
+                },
+            )
+        except Exception as e:
+            logger.warning(f"Failed to save user profile: {e}")
 
         # 2. Create tasks
         logger.info("Creating outfit tasks")
@@ -948,9 +1063,43 @@ class AsyncLeaderAgent:
         logger.info("Waiting for Sub Agent results (async)")
         results = await self._collect_results(tasks)
 
+        # 4.5. Save each recommendation to DB
+        for category, rec in results.items():
+            try:
+                self._db.save_outfit_recommendation(
+                    session_id=self.session_id,
+                    category=category,
+                    items=rec.items,
+                    colors=rec.colors,
+                    styles=rec.styles,
+                    reasons=rec.reasons,
+                    price_range=rec.price_range,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to save recommendation for {category}: {e}")
+
         # 5. Aggregate
         logger.info("Aggregating results (async)")
         final = await self.aggregate_results(profile, results)
+
+        # 5.3. Add assistant response to memory
+        if self.session_memory:
+            self.session_memory.add_system_turn(final.to_display())
+            # Trigger distillation after task completion
+            self.session_memory.user_memory.distill()
+            self.session_memory.task_memory.distill()
+
+        # 5.5. Update session status
+        try:
+            self._db.update_session(
+                self.session_id,
+                final_output=final.to_display(),
+                summary=final.summary,
+                status="completed",
+            )
+        except Exception as e:
+            logger.warning(f"Failed to update session: {e}")
+
         return final
 
     async def _parse_user_profile(self, user_input: str) -> UserProfile:
@@ -1192,7 +1341,7 @@ Return ONLY JSON array like ["head", "top"], no other text.
                 progress_msg = msg.payload.get("message", "")
                 agent_progress[sender_id] = progress
                 logger.info(
-                    f"Progress from {sender_id}: {progress*100:.0f}% - {progress_msg}"
+                    f"Progress from {sender_id}: {progress * 100:.0f}% - {progress_msg}"
                 )
 
         # Check for missing results

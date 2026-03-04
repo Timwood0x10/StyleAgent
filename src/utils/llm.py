@@ -3,6 +3,7 @@ Local Model Integration - gpt-oss-20b
 """
 
 import os
+import json
 import requests
 import httpx
 import asyncio
@@ -164,19 +165,148 @@ class LocalLLM:
 
 
 class MockLLM:
-    """Mock LLM - for testing"""
+    """Mock LLM - for testing (returns context-aware JSON responses)"""
 
-    def __init__(self, response: str = "This is a mock response"):
+    def __init__(self, response: str = "", smart_response: bool = True):
         self.response = response
         self.available = True
+        self.smart_response = smart_response
+
+    def _generate_smart_response(self, prompt: str) -> str:
+        """Generate context-aware JSON response based on prompt keywords"""
+        prompt_lower = prompt.lower()
+
+        # User profile extraction
+        if "extract" in prompt_lower and (
+            "profile" in prompt_lower or "user" in prompt_lower
+        ):
+            return json.dumps(
+                {
+                    "name": "TestUser",
+                    "gender": "male",
+                    "age": 25,
+                    "occupation": "engineer",
+                    "hobbies": ["reading", "sports"],
+                    "mood": "happy",
+                    "style_preference": "casual",
+                    "budget": "medium",
+                    "season": "spring",
+                    "occasion": "daily",
+                }
+            )
+
+        # Category analysis
+        if (
+            "categories" in prompt_lower
+            or "which clothing" in prompt_lower
+            or "determine" in prompt_lower
+        ):
+            return '["head", "top", "bottom", "shoes"]'
+
+        # Overall style aggregation
+        if (
+            "overall_style" in prompt_lower
+            or "aggregate" in prompt_lower
+            or "style suggestions" in prompt_lower
+        ):
+            return json.dumps(
+                {
+                    "overall_style": "Smart casual with a modern touch",
+                    "summary": "A well-coordinated outfit balancing comfort and style",
+                }
+            )
+
+        # Fashion search tool
+        if (
+            "fashion recommendations" in prompt_lower
+            or "colors" in prompt_lower
+            and "mood" in prompt_lower
+        ):
+            return json.dumps(
+                {
+                    "colors": ["light blue", "white", "beige"],
+                    "style_tips": ["Keep it simple", "Layer wisely"],
+                    "season_colors": ["pastel green", "sky blue"],
+                }
+            )
+
+        # Weather tool
+        if "weather" in prompt_lower and "clothing" in prompt_lower:
+            return json.dumps(
+                {
+                    "location": "Beijing",
+                    "temperature": "15-25°C",
+                    "weather": "sunny",
+                    "humidity": "50%",
+                    "clothing_suggestion": "Light layers recommended",
+                }
+            )
+
+        # Style recommend tool
+        if (
+            "recommend" in prompt_lower
+            and "style" in prompt_lower
+            and "items" in prompt_lower
+        ):
+            return json.dumps(
+                {
+                    "style": "casual",
+                    "items": [
+                        "cotton T-shirt",
+                        "slim jeans",
+                        "canvas sneakers",
+                        "baseball cap",
+                    ],
+                    "tips": ["Match colors with season", "Prioritize comfort"],
+                }
+            )
+
+        # Outfit recommendation (head/top/bottom/shoes)
+        if "recommend" in prompt_lower and any(
+            cat in prompt_lower
+            for cat in ["head", "top", "bottom", "shoes", "accessories", "clothing"]
+        ):
+            # Detect category from prompt
+            category = "top"  # default
+            for cat in ["head", "shoes", "bottom", "top"]:
+                if cat in prompt_lower:
+                    category = cat
+                    break
+
+            items_map = {
+                "head": ["Classic baseball cap", "Minimalist sunglasses"],
+                "top": ["Fitted cotton T-shirt", "Light denim jacket"],
+                "bottom": ["Slim-fit chinos", "Tapered joggers"],
+                "shoes": ["White canvas sneakers", "Casual loafers"],
+            }
+            return json.dumps(
+                {
+                    "category": category,
+                    "items": items_map.get(category, ["basic item"]),
+                    "colors": ["navy blue", "white"],
+                    "styles": ["casual", "modern"],
+                    "reasons": [
+                        "Matches user's mood and occasion",
+                        "Appropriate for the season",
+                    ],
+                    "price_range": "¥200-500",
+                }
+            )
+
+        # Default fallback
+        return self.response or "This is a mock response"
 
     def invoke(self, prompt: str, system_prompt: str = "") -> str:
-        return self.response
+        if self.smart_response:
+            return self._generate_smart_response(prompt)
+        return self.response or "This is a mock response"
 
     async def ainvoke(self, prompt: str, system_prompt: str = "") -> str:
         """Mock async invoke"""
         await asyncio.sleep(0.1)  # Simulate async delay
-        return self.response
+        if self.smart_response:
+            return self._generate_smart_response(prompt)
+        return self.response or "This is a mock response"
 
     def embed(self, text: str) -> List[float]:
         """Mock embed - return dummy vector"""

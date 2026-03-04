@@ -54,3 +54,7 @@ logs/
 .ruff_cache/
 
 .mypy_cache/
+
+.vscode/
+
+.qoder/

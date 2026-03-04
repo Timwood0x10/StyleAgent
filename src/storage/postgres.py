@@ -40,13 +40,18 @@ class Database:
         return self._conn
 
     def execute(self, sql: str, params: tuple = None):
-        """Execute SQL"""
+        """Execute SQL and return first row if available (cursor is auto-closed)"""
         cursor = None
         try:
             cursor = self.conn.cursor()
             cursor.execute(sql, params)
             self.conn.commit()
-            return cursor
+            # Fetch result before closing cursor (for RETURNING queries)
+            try:
+                row = cursor.fetchone()
+            except Exception:
+                row = None
+            return row
         except Exception as e:
             logger.error(f"Database execute error: {e}")
             raise
@@ -183,6 +188,22 @@ class StorageLayer:
             updated_at TIMESTAMP DEFAULT NOW(),
             UNIQUE(session_id, agent_id)
         );
+
+        -- Memory distillation summaries (持久化蒸馏后的记忆)
+        CREATE TABLE IF NOT EXISTS memory_summaries (
+            id SERIAL PRIMARY KEY,
+            session_id UUID NOT NULL,
+            agent_id VARCHAR(50) NOT NULL,
+            summary JSONB NOT NULL,  -- 结构化JSON格式
+            original_token_count INT,
+            compressed_token_count INT,
+            memory_type VARCHAR(20) DEFAULT 'user_memory',  -- 'user_memory' or 'task_memory'
+            distill_level INT DEFAULT 1,  -- 蒸馏层级，防止递归劣化
+            embedding vector(1536),
+            metadata JSONB,
+            created_at TIMESTAMP DEFAULT NOW(),
+            updated_at TIMESTAMP DEFAULT NOW()
+        );
         
         -- Task progress history table
         CREATE TABLE IF NOT EXISTS task_progress (
@@ -203,6 +224,8 @@ class StorageLayer:
         CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
         CREATE INDEX IF NOT EXISTS idx_contexts_session_agent ON agent_contexts(session_id, agent_id);
         CREATE INDEX IF NOT EXISTS idx_progress_task ON task_progress(task_id);
+        CREATE INDEX IF NOT EXISTS idx_memory_session_agent ON memory_summaries(session_id, agent_id);
+        CREATE INDEX IF NOT EXISTS idx_memory_embedding ON memory_summaries USING hnsw (embedding vector_cosine_ops);
         """
         self.db.execute(sql)
 
@@ -215,7 +238,7 @@ class StorageLayer:
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
         """
-        cursor = self.db.execute(
+        row = self.db.execute(
             sql,
             (
                 session_id,
@@ -231,7 +254,7 @@ class StorageLayer:
                 profile.get("occasion"),
             ),
         )
-        return cursor.fetchone()[0]
+        return row[0]
 
     def get_user_profile(self, session_id: str) -> Optional[Dict]:
         """Get user profile"""
@@ -273,10 +296,10 @@ class StorageLayer:
             VALUES (%s, %s, %s, %s, %s, %s, %s)
             RETURNING id
         """
-        cursor = self.db.execute(
+        row = self.db.execute(
             sql, (session_id, category, items, colors, styles, reasons, price_range)
         )
-        return cursor.fetchone()[0]
+        return row[0]
 
     def get_outfit_recommendations(self, session_id: str) -> List[Dict]:
         """Get outfit recommendations list"""
@@ -315,10 +338,10 @@ class StorageLayer:
         """
         # pgvector requires array format
         vec_str = "[" + ",".join(str(x) for x in embedding) + "]"
-        cursor = self.db.execute(
+        row = self.db.execute(
             sql, (session_id, content, vec_str, json.dumps(metadata or {}))
         )
-        return cursor.fetchone()[0]
+        return row[0]
 
     def search_similar(
         self, embedding: List[float], session_id: str = None, limit: int = 5
@@ -539,8 +562,7 @@ class StorageLayer:
                 updated_at = NOW()
             RETURNING id
         """
-        cursor = self.db.execute(sql, (session_id, agent_id, json.dumps(context_data)))
-        result = cursor.fetchone()
+        result = self.db.execute(sql, (session_id, agent_id, json.dumps(context_data)))
         return result[0] if result else 0
 
     def get_agent_context(self, session_id: str, agent_id: str) -> Optional[Dict]:
@@ -599,6 +621,175 @@ class StorageLayer:
                     "progress": row[3],
                     "message": row[4],
                     "created_at": row[5],
+                }
+            )
+        return results
+
+    # ========== Memory Distillation / 记忆蒸馏 ==========
+    def save_distilled_memory(
+        self,
+        session_id: str,
+        agent_id: str,
+        summary: str,  # Now JSON string
+        original_token_count: int = None,
+        compressed_token_count: int = None,
+        memory_type: str = "user_memory",
+        distill_level: int = 1,
+        embedding: List[float] = None,
+        metadata: Dict = None,
+    ):
+        """Save distilled memory with structured JSON format."""
+        sql = """
+            INSERT INTO memory_summaries
+            (session_id, agent_id, summary, original_token_count, compressed_token_count,
+             memory_type, distill_level, embedding, metadata, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+            ON CONFLICT (session_id, agent_id, memory_type)
+            DO UPDATE SET summary = EXCLUDED.summary,
+                          original_token_count = EXCLUDED.original_token_count,
+                          compressed_token_count = EXCLUDED.compressed_token_count,
+                          distill_level = EXCLUDED.distill_level,
+                          embedding = EXCLUDED.embedding,
+                          metadata = EXCLUDED.metadata,
+                          updated_at = NOW()
+        """
+        # Convert embedding to PostgreSQL array format
+        embedding_arr = None
+        if embedding:
+            embedding_arr = "[" + ",".join(map(str, embedding)) + "]"
+
+        metadata_json = json.dumps(metadata) if metadata else None
+
+        self.db.execute(
+            sql,
+            (
+                session_id,
+                agent_id,
+                summary,
+                original_token_count,
+                compressed_token_count,
+                memory_type,
+                distill_level,
+                embedding_arr,
+                metadata_json,
+            ),
+        )
+
+    def get_distilled_memories(
+        self,
+        session_id: str,
+        agent_id: str = None,
+        memory_type: str = None,
+        limit: int = 5,
+    ) -> List[Dict]:
+        """Get distilled memories with optional memory_type filter."""
+        conditions = ["session_id = %s"]
+        params = [session_id]
+
+        if agent_id:
+            conditions.append("agent_id = %s")
+            params.append(agent_id)
+
+        if memory_type:
+            conditions.append("memory_type = %s")
+            params.append(memory_type)
+
+        where_clause = " AND ".join(conditions)
+
+        sql = f"""
+            SELECT id, session_id, agent_id, summary, original_token_count,
+                   compressed_token_count, memory_type, distill_level,
+                   metadata, created_at, updated_at
+            FROM memory_summaries
+            WHERE {where_clause}
+            ORDER BY updated_at DESC
+            LIMIT %s
+        """
+        params.append(str(limit))
+
+        rows = self.db.fetch_all(sql, tuple(params))
+
+        results = []
+        for row in rows:
+            # Parse summary as JSON
+            summary_data = row[3]
+            if isinstance(summary_data, str):
+                try:
+                    summary_data = json.loads(summary_data)
+                except json.JSONDecodeError:
+                    pass  # Keep as string if not valid JSON
+
+            results.append(
+                {
+                    "id": row[0],
+                    "session_id": row[1],
+                    "agent_id": row[2],
+                    "summary": summary_data,
+                    "original_token_count": row[4],
+                    "compressed_token_count": row[5],
+                    "memory_type": row[6],
+                    "distill_level": row[7],
+                    "metadata": row[8],
+                    "created_at": row[9],
+                    "updated_at": row[10],
+                }
+            )
+        return results
+
+    def search_similar_memories(
+        self,
+        embedding: List[float],
+        agent_id: str = None,
+        memory_type: str = None,
+        limit: int = 3,
+        match_threshold: float = 0.7,
+    ) -> List[Dict]:
+        """Search similar memories (vector search)"""
+        embedding_arr = "[" + ",".join(map(str, embedding)) + "]"
+
+        # Build WHERE clause
+        conditions = ["embedding <=> %s::vector < %s"]
+        params = [embedding_arr, 1 - match_threshold]
+
+        if agent_id:
+            conditions.append("agent_id = %s")
+            params.append(agent_id)
+
+        if memory_type:
+            conditions.append("memory_type = %s")
+            params.append(memory_type)
+
+        where_clause = " AND ".join(conditions)
+
+        sql = f"""
+            SELECT id, session_id, agent_id, summary, original_token_count,
+                   compressed_token_count, memory_type, distill_level, metadata,
+                   created_at, updated_at,
+                   1 - (embedding <=> %s::vector) as similarity
+            FROM memory_summaries
+            WHERE {where_clause}
+            ORDER BY embedding <=> %s::vector
+            LIMIT %s
+        """
+        # Add embedding for similarity calculation
+        params.extend([embedding_arr, limit])
+
+        rows = self.db.fetch_all(sql, tuple(params))
+
+        results = []
+        for row in rows:
+            results.append(
+                {
+                    "id": row[0],
+                    "session_id": row[1],
+                    "agent_id": row[2],
+                    "summary": row[3],
+                    "original_token_count": row[4],
+                    "compressed_token_count": row[5],
+                    "metadata": row[6],
+                    "created_at": row[7],
+                    "updated_at": row[8],
+                    "similarity": row[9],
                 }
             )
         return results
