@@ -17,9 +17,7 @@ from ..utils.llm import LocalLLM
 from ..utils import get_logger
 from ..protocol import get_message_queue, AHPReceiver, AHPSender, AHPError, AHPErrorCode
 from ..storage.postgres import StorageLayer
-from ..core.errors import RetryHandler, RetryConfig, ErrorType, CircuitBreaker, FallbackHandler
-from ..core.registry import TaskRegistry, get_task_registry
-from ..utils.context import SessionMemory
+from ..core.errors import RetryHandler, RetryConfig, ErrorType, CircuitBreaker
 
 # Logger for this module
 logger = get_logger(__name__)
@@ -101,27 +99,11 @@ class OutfitSubAgent:
         # Initialize circuit breaker for LLM calls
         self.circuit_breaker = CircuitBreaker(failure_threshold=5, timeout=60)
 
-        # Initialize session memory for this sub-agent category
-        self.session_memory: Optional[SessionMemory] = None
-
-        # Initialize task registry for task management
-        self._registry: Optional[TaskRegistry] = None
-
-        # Initialize fallback handler for graceful degradation
-        self.fallback_handler = FallbackHandler()
-        self.fallback_handler.register("default", self._default_recommendation)
-
     def _get_db(self) -> StorageLayer:
         """Lazy init database connection"""
         if self._db is None:
             self._db = StorageLayer()
         return self._db
-
-    def _get_registry(self) -> TaskRegistry:
-        """Lazy init task registry"""
-        if self._registry is None:
-            self._registry = get_task_registry()
-        return self._registry
 
     def start(self):
         """Start agent (listen to message queue)"""
@@ -159,22 +141,6 @@ class OutfitSubAgent:
         payload = msg.payload
 
         try:
-            # Initialize session memory for this session
-            if self.session_memory is None and session_id:
-                self.session_memory = SessionMemory(
-                    session_id=session_id,
-                    llm=self.llm,
-                    storage=self._get_db(),
-                    agent_id=self.agent_id,
-                )
-
-            # Add task info to memory
-            if self.session_memory:
-                user_info = payload.get("user_info", {})
-                self.session_memory.add_task_context(
-                    f"Task: {task_id}, Category: {self.category}"
-                )
-
             # 1. Send progress
             self.sender.send_progress("leader", task_id, session_id, 0.1, "Starting")
 
@@ -225,10 +191,6 @@ class OutfitSubAgent:
                 status="success",
             )
 
-            # 4. Distill memory after task completion
-            if self.session_memory:
-                self.session_memory.task_memory.distill()
-
             logger.info(f"[{self.agent_id}] task completed")
 
         except Exception as e:
@@ -237,12 +199,6 @@ class OutfitSubAgent:
             )
             # Move to DLQ for failed tasks
             self.mq.to_dlq(self.agent_id, msg, str(e))
-            # Try to retry failed task via registry
-            try:
-                registry = self._get_registry()
-                registry.retry_failed_task(task_id)
-            except Exception as reg_err:
-                logger.debug(f"Registry retry not available: {reg_err}")
             logger.error(f"[{self.agent_id}] task failed: {e}")
 
     def _get_rag_context(self, user_profile: UserProfile, limit: int = 3) -> str:
@@ -291,18 +247,6 @@ class OutfitSubAgent:
         except Exception as e:
             logger.warning(f"RAG context retrieval failed: {e}")
             return ""
-
-    def _default_recommendation(self, *args, **kwargs) -> OutfitRecommendation:
-        """Default fallback recommendation when LLM fails"""
-        logger.info(f"[{self.agent_id}] Using fallback recommendation")
-        return OutfitRecommendation(
-            category=self.category,
-            items=[f"Basic {self.category}"],
-            colors=["neutral"],
-            styles=["casual"],
-            reasons=["Default recommendation due to service unavailable"],
-            price_range="Unknown",
-        )
 
     def _build_rag_query(self, user_profile: UserProfile) -> str:
         """Build query text for RAG embedding"""

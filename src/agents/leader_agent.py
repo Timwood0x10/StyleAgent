@@ -623,7 +623,6 @@ Only return JSON, no other content.
         received: set[str] = set()
         pending_tasks = {t.assignee_agent_id: t for t in tasks}
         agent_progress: Dict[str, float] = {}  # Track progress per agent
-        progress_lock = threading.Lock()  # Thread safety for agent_progress
         progress_queue: queue.Queue = queue.Queue()  # Queue for progress messages
 
         # Start a background thread to handle PROGRESS messages
@@ -656,8 +655,7 @@ Only return JSON, no other content.
                     sender_id = msg.agent_id
                     progress = msg.payload.get("progress", 0)
                     progress_msg = msg.payload.get("message", "")
-                    with progress_lock:
-                        agent_progress[sender_id] = progress
+                    agent_progress[sender_id] = progress
                     logger.info(
                         f"Progress from {sender_id}: {progress * 100:.0f}% - {progress_msg}"
                     )
@@ -683,8 +681,7 @@ Only return JSON, no other content.
             if msg.method == AHPMethod.PROGRESS:
                 progress = msg.payload.get("progress", 0)
                 progress_msg = msg.payload.get("message", "")
-                with progress_lock:
-                    agent_progress[sender_id] = progress
+                agent_progress[sender_id] = progress
                 logger.info(
                     f"Progress from {sender_id}: {progress * 100:.0f}% - {progress_msg}"
                 )
@@ -817,32 +814,6 @@ Only return JSON, no other content.
                         "styles", recommendation.styles
                     )
             validated_results[category] = recommendation
-
-        # Batch validation for all results using validate_all
-        all_results_dict = {
-            cat: {
-                "items": rec.items,
-                "colors": rec.colors,
-                "styles": rec.styles,
-                "reasons": rec.reasons,
-                "price_range": rec.price_range,
-            }
-            for cat, rec in validated_results.items()
-        }
-        batch_validation = self.validator.validate_all(all_results_dict)
-
-        # Log validation summary
-        validation_summary = self.validator.get_summary(batch_validation)
-        logger.debug(f"Batch validation summary: {validation_summary}")
-
-        # Apply auto-fix for any failed validations
-        for category, vr in batch_validation.items():
-            if not vr.is_valid and vr.corrected:
-                rec = validated_results.get(category)
-                if rec:
-                    rec.items = vr.corrected.get("items", rec.items)
-                    rec.colors = vr.corrected.get("colors", rec.colors)
-                    rec.styles = vr.corrected.get("styles", rec.styles)
 
         style_prompt = f"""Based on the following user profile and outfit recommendations, provide overall style suggestions:
 
