@@ -194,9 +194,11 @@ class StorageLayer:
             id SERIAL PRIMARY KEY,
             session_id UUID NOT NULL,
             agent_id VARCHAR(50) NOT NULL,
-            summary TEXT NOT NULL,
+            summary JSONB NOT NULL,  -- 结构化JSON格式
             original_token_count INT,
             compressed_token_count INT,
+            memory_type VARCHAR(20) DEFAULT 'user_memory',  -- 'user_memory' or 'task_memory'
+            distill_level INT DEFAULT 1,  -- 蒸馏层级，防止递归劣化
             embedding vector(1536),
             metadata JSONB,
             created_at TIMESTAMP DEFAULT NOW(),
@@ -628,26 +630,30 @@ class StorageLayer:
         self,
         session_id: str,
         agent_id: str,
-        summary: str,
+        summary: str,  # Now JSON string
         original_token_count: int = None,
         compressed_token_count: int = None,
+        memory_type: str = "user_memory",
+        distill_level: int = 1,
         embedding: List[float] = None,
         metadata: Dict = None,
     ):
-        """保存蒸馏后的记忆"""
+        """Save distilled memory with structured JSON format."""
         sql = """
-            INSERT INTO memory_summaries 
-            (session_id, agent_id, summary, original_token_count, compressed_token_count, embedding, metadata, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
-            ON CONFLICT (session_id, agent_id) 
-            DO UPDATE SET summary = EXCLUDED.summary, 
+            INSERT INTO memory_summaries
+            (session_id, agent_id, summary, original_token_count, compressed_token_count,
+             memory_type, distill_level, embedding, metadata, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+            ON CONFLICT (session_id, agent_id, memory_type)
+            DO UPDATE SET summary = EXCLUDED.summary,
                           original_token_count = EXCLUDED.original_token_count,
                           compressed_token_count = EXCLUDED.compressed_token_count,
+                          distill_level = EXCLUDED.distill_level,
                           embedding = EXCLUDED.embedding,
                           metadata = EXCLUDED.metadata,
                           updated_at = NOW()
         """
-        # 将 embedding 转换为 PostgreSQL 数组格式
+        # Convert embedding to PostgreSQL array format
         embedding_arr = None
         if embedding:
             embedding_arr = "[" + ",".join(map(str, embedding)) + "]"
@@ -662,49 +668,70 @@ class StorageLayer:
                 summary,
                 original_token_count,
                 compressed_token_count,
+                memory_type,
+                distill_level,
                 embedding_arr,
                 metadata_json,
             ),
         )
 
     def get_distilled_memories(
-        self, session_id: str, agent_id: str = None, limit: int = 5
+        self,
+        session_id: str,
+        agent_id: str = None,
+        memory_type: str = None,
+        limit: int = 5,
     ) -> List[Dict]:
-        """获取蒸馏记忆列表"""
+        """Get distilled memories with optional memory_type filter."""
+        conditions = ["session_id = %s"]
+        params = [session_id]
+
         if agent_id:
-            sql = """
-                SELECT id, session_id, agent_id, summary, original_token_count, 
-                       compressed_token_count, metadata, created_at, updated_at
-                FROM memory_summaries 
-                WHERE session_id = %s AND agent_id = %s
-                ORDER BY updated_at DESC
-                LIMIT %s
-            """
-            rows = self.db.fetch_all(sql, (session_id, agent_id, limit))
-        else:
-            sql = """
-                SELECT id, session_id, agent_id, summary, original_token_count, 
-                       compressed_token_count, metadata, created_at, updated_at
-                FROM memory_summaries 
-                WHERE session_id = %s
-                ORDER BY updated_at DESC
-                LIMIT %s
-            """
-            rows = self.db.fetch_all(sql, (session_id, limit))
+            conditions.append("agent_id = %s")
+            params.append(agent_id)
+
+        if memory_type:
+            conditions.append("memory_type = %s")
+            params.append(memory_type)
+
+        where_clause = " AND ".join(conditions)
+
+        sql = f"""
+            SELECT id, session_id, agent_id, summary, original_token_count,
+                   compressed_token_count, memory_type, distill_level,
+                   metadata, created_at, updated_at
+            FROM memory_summaries
+            WHERE {where_clause}
+            ORDER BY updated_at DESC
+            LIMIT %s
+        """
+        params.append(str(limit))
+
+        rows = self.db.fetch_all(sql, tuple(params))
 
         results = []
         for row in rows:
+            # Parse summary as JSON
+            summary_data = row[3]
+            if isinstance(summary_data, str):
+                try:
+                    summary_data = json.loads(summary_data)
+                except json.JSONDecodeError:
+                    pass  # Keep as string if not valid JSON
+
             results.append(
                 {
                     "id": row[0],
                     "session_id": row[1],
                     "agent_id": row[2],
-                    "summary": row[3],
+                    "summary": summary_data,
                     "original_token_count": row[4],
                     "compressed_token_count": row[5],
-                    "metadata": row[6],
-                    "created_at": row[7],
-                    "updated_at": row[8],
+                    "memory_type": row[6],
+                    "distill_level": row[7],
+                    "metadata": row[8],
+                    "created_at": row[9],
+                    "updated_at": row[10],
                 }
             )
         return results
@@ -713,53 +740,41 @@ class StorageLayer:
         self,
         embedding: List[float],
         agent_id: str = None,
+        memory_type: str = None,
         limit: int = 3,
         match_threshold: float = 0.7,
     ) -> List[Dict]:
-        """搜索相似记忆（向量检索）"""
+        """Search similar memories (vector search)"""
         embedding_arr = "[" + ",".join(map(str, embedding)) + "]"
 
+        # Build WHERE clause
+        conditions = ["embedding <=> %s::vector < %s"]
+        params = [embedding_arr, 1 - match_threshold]
+
         if agent_id:
-            sql = """
-                SELECT id, session_id, agent_id, summary, original_token_count, 
-                       compressed_token_count, metadata, created_at, updated_at,
-                       1 - (embedding <=> %s::vector) as similarity
-                FROM memory_summaries 
-                WHERE agent_id = %s AND embedding <=> %s::vector < %s
-                ORDER BY embedding <=> %s::vector
-                LIMIT %s
-            """
-            rows = self.db.fetch_all(
-                sql,
-                (
-                    embedding_arr,
-                    agent_id,
-                    embedding_arr,
-                    1 - match_threshold,
-                    embedding_arr,
-                    limit,
-                ),
-            )
-        else:
-            sql = """
-                SELECT id, session_id, agent_id, summary, original_token_count, 
-                       compressed_token_count, metadata, created_at, updated_at,
-                       1 - (embedding <=> %s::vector) as similarity
-                FROM memory_summaries 
-                WHERE embedding <=> %s::vector < %s
-                ORDER BY embedding <=> %s::vector
-                LIMIT %s
-            """
-            rows = self.db.fetch_all(
-                sql,
-                (
-                    embedding_arr,
-                    embedding_arr,
-                    1 - match_threshold,
-                    embedding_arr,
-                    limit,
-                ),
-            )
+            conditions.append("agent_id = %s")
+            params.append(agent_id)
+
+        if memory_type:
+            conditions.append("memory_type = %s")
+            params.append(memory_type)
+
+        where_clause = " AND ".join(conditions)
+
+        sql = f"""
+            SELECT id, session_id, agent_id, summary, original_token_count,
+                   compressed_token_count, memory_type, distill_level, metadata,
+                   created_at, updated_at,
+                   1 - (embedding <=> %s::vector) as similarity
+            FROM memory_summaries
+            WHERE {where_clause}
+            ORDER BY embedding <=> %s::vector
+            LIMIT %s
+        """
+        # Add embedding for similarity calculation
+        params.extend([embedding_arr, limit])
+
+        rows = self.db.fetch_all(sql, tuple(params))
 
         results = []
         for row in rows:

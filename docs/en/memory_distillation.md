@@ -2,65 +2,52 @@
 
 ## Overview
 
-Memory Distillation is a technique for compressing long-term conversation history into concise, key information summaries. It addresses the token limit challenge in LLM conversations by:
+Memory Distillation is a module that converts conversation history into structured memories, persists them to pgvector for cross-session retrieval, and supports memory type separation.
 
-1. **Detecting when distillation is needed** - Monitors token usage and triggers distillation when threshold is reached
-2. **Extracting key information** - Uses LLM to distill important details (user preferences, decisions, context)
-3. **Persisting to vector database** - Stores distilled memories in pgvector for cross-session retrieval
-4. **Retrieving relevant memories** - Enables semantic search of historical distilled memories
+## Core Concepts
 
-## Why Memory Distillation?
+### 1. Structured Memory Format
 
-### Problem
-- LLMs have context window limits (e.g., 4K, 8K, 32K tokens)
-- Long conversations exceed these limits
-- Simply truncating loses important information
+The distillation output is now in structured JSON format:
 
-### Solution: Distillation
-Instead of losing information, we:
-1. Keep recent N turns as-is (full context)
-2. Compress earlier turns into concise summaries using LLM
-3. Store summaries in vector database for retrieval
-
-## Architecture
-
-### Components
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                    SessionMemory                        │
-│  (Manages distillation for a session)                  │
-├─────────────────────────────────────────────────────────┤
-│                  MemoryDistiller                        │
-│  - Tracks conversation history                          │
-│  - Estimates token usage                               │
-│  - Triggers LLM-based distillation                     │
-│  - Persists to StorageLayer                            │
-├─────────────────────────────────────────────────────────┤
-│                   StorageLayer                         │
-│  - PostgreSQL + pgvector                               │
-│  - save_distilled_memory()                             │
-│  - get_distilled_memories()                            │
-│  - search_similar_memories()                           │
-└─────────────────────────────────────────────────────────┘
+```json
+{
+    "user_profile": {"key": "value"},
+    "decisions_made": [{"key": "unique_id", "description": "description"}],
+    "pending_tasks": [{"task_id": "unique_id", "description": "description"}],
+    "important_facts": ["fact1", "fact2"]
+}
 ```
 
-### Database Schema
+- **user_profile**: Long-term user attributes (style preference, budget, etc.)
+- **decisions_made**: Decisions already made with unique keys to avoid duplicates
+- **pending_tasks**: Unfinished important tasks
+- **important_facts**: Other important facts not suitable for above categories
 
-```sql
-CREATE TABLE memory_summaries (
-    id SERIAL PRIMARY KEY,
-    session_id UUID NOT NULL,
-    agent_id VARCHAR(50) NOT NULL,
-    summary TEXT NOT NULL,
-    original_token_count INT,
-    compressed_token_count INT,
-    embedding vector(1536),
-    metadata JSONB,
-    created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW()
-);
-```
+### 2. Distill Level (Prevent Recursive Degradation)
+
+To prevent information loss from multiple distillations:
+
+- Each memory has a `distill_level` field (1, 2, 3)
+- Maximum level is 3 - memories above this level won't be distilled again
+- This ensures information quality doesn't degrade over time
+
+### 3. Importance Filtering
+
+Before distillation, conversations are evaluated for importance:
+
+- Only conversations containing long-term valid information are distilled
+- Long-term info includes: user preferences, identity info, key decisions
+- Reduces noise in long-term memory
+
+### 4. Memory Type Separation
+
+Two types of memory are maintained separately:
+
+| Type | Description | Cross-session |
+|------|-------------|---------------|
+| user_memory | User preferences, budget, style | ✅ Yes |
+| task_memory | Current task progress | ❌ No |
 
 ## Usage
 
@@ -71,168 +58,128 @@ from src.utils import SessionMemory, LocalLLM
 from src.storage import get_storage
 
 # Initialize
-llm = LocalLLM()
-storage = get_storage()
 session_memory = SessionMemory(
-    session_id="user-123",
-    llm=llm,
-    storage=storage,
-    agent_id="leader",
-    max_tokens=4000
+    session_id="uuid",
+    llm=your_llm,
+    storage=get_storage(),
+    agent_id="leader"
 )
 
-# Add conversation turns
-session_memory.add_user_turn("我想买一件外套", "好的，请问您的预算是多少？")
-session_memory.add_user_turn("500左右", "推荐这款...")
-session_memory.add_user_turn("还有其他款式吗", "当然，这里有...")
+# Add conversation
+session_memory.add_user_turn("I want to buy a coat", "What's your budget?")
+session_memory.add_user_turn("Around 500", "推荐这款...")
 
-# Get distilled context (auto-distills if threshold exceeded)
+# Get distilled context (auto-distills when threshold exceeded)
 context = session_memory.get_context()
+
+# Get user profile
+profile = session_memory.get_user_profile()
+# {"style_preference": "casual", "budget": "500"}
+
+# Get pending tasks
+tasks = session_memory.get_pending_tasks()
 ```
 
-### Manual Distillation
+### Separate User/Task Memory
 
 ```python
-# Manual trigger
-session_memory.distiller.distill()
+# Add user conversation
+session_memory.add_user_turn("user input", "assistant response")
 
-# Async version
-await session_memory.distiller.adistill()
+# Add task context
+session_memory.add_task_context("Task: Recommend outfit - Status: 80% complete")
+
+# Get specific memory type
+user_context = session_memory.get_user_context()
+task_context = session_memory.get_task_context()
 ```
 
 ### Search Similar Memories
 
 ```python
-# Search for relevant historical memories
-results = session_memory.search_memory("用户偏好")
-for r in results:
-    print(f"- {r['summary']} (similarity: {r['similarity']})")
+# Search in user_memory
+results = session_memory.search_memory("user preferences", memory_type="user_memory")
+
+# Search in task_memory
+results = session_memory.search_memory("outfit recommendation", memory_type="task_memory")
+
+# Search both
+results = session_memory.search_memory("budget")
 ```
 
 ## Configuration
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `max_tokens` | 4000 | Maximum tokens before distillation |
-| `distill_threshold` | 0.8 | Threshold (0-1) to trigger distillation |
-| `keep_recent` | 4 | Number of recent turns to keep intact |
-
-### Tuning
+| max_tokens | 4000 | Maximum tokens before distillation |
+| distill_threshold | 0.8 | Threshold (0.0-1.0) to trigger distillation |
+| keep_recent | 4 | Number of recent turns to keep intact |
+| enable_importance_filter | True | Whether to filter by importance |
 
 ```python
-# More aggressive distillation
 session_memory = SessionMemory(
-    max_tokens=2000,       # Smaller context window
-    distill_threshold=0.6,  # Trigger earlier
-    keep_recent=2          # Keep fewer recent turns
+    session_id="uuid",
+    llm=llm,
+    storage=storage,
+    max_tokens=2000,  # Smaller threshold
+    enable_importance_filter=False  # Disable filtering
 )
 ```
 
-## How Distillation Works
+## Database Schema
 
-### Step-by-Step Flow
-
-```
-Conversation History:
-[User1] → [Assistant1] → [User2] → [Assistant2] → [User3] → [Assistant3] → [User4] → [Assistant4] → [User5]
-
-Threshold exceeded (>80% of max_tokens)
-           │
-           ▼
-┌─────────────────────────────────────┐
-│  1. Split:                          │
-│     - To Distill: User1-Assistant3  │
-│     - Keep: User4-Assistant4       │
-└─────────────────────────────────────┘
-           │
-           ▼
-┌─────────────────────────────────────┐
-│  2. LLM Distillation Prompt:        │
-│  "Summarize key info:               │
-│   - User preferences                │
-│   - Important decisions             │
-│   - Uncompleted tasks               │
-│   - Critical context                │
-│  Keep in Chinese."                  │
-└─────────────────────────────────────┘
-           │
-           ▼
-┌─────────────────────────────────────┐
-│  3. LLM Output (Summary):           │
-│  "用户偏好休闲风格，预算500左右，     │
-│   已推荐外套款式，正在挑选中..."      │
-└─────────────────────────────────────┘
-           │
-           ▼
-┌─────────────────────────────────────┐
-│  4. Persist to pgvector:            │
-│  - Save summary text                │
-│  - Generate embedding               │
-│  - Store with metadata              │
-└─────────────────────────────────────┘
-           │
-           ▼
-Final Context:
-┌─────────────────────────────────────┐
-│ [Distilled Memory]                  │
-│ 用户偏好休闲风格，预算500左右...     │
-├─────────────────────────────────────┤
-│ [Recent Turns]                      │
-│ User4: 还有其他款式吗               │
-│ Assistant: 当然，这里有...           │
-└─────────────────────────────────────┘
+```sql
+CREATE TABLE memory_summaries (
+    id SERIAL PRIMARY KEY,
+    session_id UUID NOT NULL,
+    agent_id VARCHAR(50) NOT NULL,
+    summary JSONB NOT NULL,  -- Structured JSON
+    original_token_count INT,
+    compressed_token_count INT,
+    memory_type VARCHAR(20) DEFAULT 'user_memory',
+    distill_level INT DEFAULT 1,
+    embedding vector(1536),
+    metadata JSONB,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
 ```
 
-## Benefits
+## API Reference
 
-1. **Token Efficiency**: Compresses 4000+ tokens into ~200 token summaries
-2. **Information Retention**: Preserves key preferences and decisions
-3. **Cross-Session Persistence**: Memories survive restarts
-4. **Semantic Retrieval**: Find relevant historical context via vector search
-5. **Automatic**: Happens transparently, no manual intervention needed
+### SessionMemory
 
-## Integration with Agents
+| Method | Description |
+|--------|-------------|
+| `add_user_turn(user_input, assistant_response)` | Add conversation turn |
+| `add_task_context(task_info)` | Add task context |
+| `get_context()` | Get combined context |
+| `get_user_context()` | Get user memory only |
+| `get_task_context()` | Get task memory only |
+| `get_user_profile()` | Get user profile from memory |
+| `get_pending_tasks()` | Get pending tasks |
+| `search_memory(query, memory_type, limit)` | Search similar memories |
+| `clear()` | Clear all memory |
 
-### Leader Agent Integration
+### MemoryDistiller
 
-```python
-from src.utils import SessionMemory
+| Method | Description |
+|--------|-------------|
+| `set_session(session_id)` | Set session ID |
+| `set_memory_type(type)` | Set memory type (user_memory/task_memory) |
+| `add_user(content)` | Add user message |
+| `add_assistant(content)` | Add assistant message |
+| `should_distill()` | Check if distillation needed |
+| `distill()` | Trigger distillation |
+| `get_context()` | Get distilled context |
+| `search_similar_memories(query, limit)` | Search similar memories |
 
-class LeaderAgent:
-    def __init__(self, ...):
-        self.session_memory = SessionMemory(
-            session_id=session_id,
-            llm=self.llm,
-            storage=self.storage,
-            agent_id="leader"
-        )
-    
-    async def handle_user_input(self, user_input: str):
-        # Add to memory
-        self.session_memory.add_user_turn(user_input)
-        
-        # Get distilled context for LLM
-        context = await self.session_memory.aget_context()
-        
-        # Use in LLM prompt
-        response = await self.llm.ainvoke(
-            prompt=f"Context: {context}\n\nUser: {user_input}"
-        )
-        
-        self.session_memory.add_system_turn(response)
-        return response
-```
+### StructuredMemory
 
-## Error Handling
-
-- **No LLM**: Distillation skipped, continues with existing context
-- **No Storage**: In-memory only, no persistence
-- **LLM Failure**: Logs error, keeps original context
-- **Empty History**: No distillation performed
-
-## Performance Considerations
-
-- Distillation adds latency (~1-2s per LLM call)
-- Embedding generation adds ~0.5s
-- Vector search is fast (<100ms)
-- Consider async distillation for better UX
+| Method | Description |
+|--------|-------------|
+| `to_dict()` | Convert to dictionary |
+| `to_json()` | Convert to JSON string |
+| `from_dict(data)` | Create from dictionary |
+| `from_json(json_str)` | Create from JSON string |
+| `merge(other)` | Merge another memory |

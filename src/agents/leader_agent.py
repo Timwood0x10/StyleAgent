@@ -8,7 +8,7 @@ import queue
 import threading
 import time
 import uuid
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 from ..core.models import (
     UserProfile,
     Gender,
@@ -19,6 +19,7 @@ from ..core.models import (
 from ..core.validator import ResultValidator, ValidationLevel
 from ..core.registry import TaskRegistry, get_task_registry, TaskStatus
 from ..core.errors import RetryHandler, RetryConfig, ErrorType, CircuitBreaker
+from ..utils.context import SessionMemory
 from ..utils.llm import LocalLLM
 from ..utils import get_logger
 from ..utils.config import config
@@ -53,6 +54,9 @@ class LeaderAgent:
         self.validator = ResultValidator(level=ValidationLevel.NORMAL)
         self.registry = get_task_registry()
         self._db = StorageLayer()  # For RAG vector storage
+
+        # Initialize session memory for distillation
+        self.session_memory: Optional[SessionMemory] = None
 
         # Initialize retry handler
         retry_config = RetryConfig(
@@ -653,7 +657,7 @@ Only return JSON, no other content.
                     progress_msg = msg.payload.get("message", "")
                     agent_progress[sender_id] = progress
                     logger.info(
-                        f"Progress from {sender_id}: {progress*100:.0f}% - {progress_msg}"
+                        f"Progress from {sender_id}: {progress * 100:.0f}% - {progress_msg}"
                     )
                 except queue.Empty:
                     break
@@ -679,7 +683,7 @@ Only return JSON, no other content.
                 progress_msg = msg.payload.get("message", "")
                 agent_progress[sender_id] = progress
                 logger.info(
-                    f"Progress from {sender_id}: {progress*100:.0f}% - {progress_msg}"
+                    f"Progress from {sender_id}: {progress * 100:.0f}% - {progress_msg}"
                 )
                 continue
 
@@ -1007,6 +1011,16 @@ class AsyncLeaderAgent:
 
         self.session_id = str(uuid.uuid4())
 
+        # Initialize session memory for this session
+        self.session_memory = SessionMemory(
+            session_id=self.session_id,
+            llm=self.llm,
+            storage=self._db,
+            agent_id="leader",
+        )
+        # Add user input to memory
+        self.session_memory.add_user_turn(user_input, "")
+
         # 0.5. Save session to DB
         try:
             self._db.save_session(self.session_id, user_input)
@@ -1067,6 +1081,13 @@ class AsyncLeaderAgent:
         # 5. Aggregate
         logger.info("Aggregating results (async)")
         final = await self.aggregate_results(profile, results)
+
+        # 5.3. Add assistant response to memory
+        if self.session_memory:
+            self.session_memory.add_system_turn(final.to_display())
+            # Trigger distillation after task completion
+            self.session_memory.user_memory.distill()
+            self.session_memory.task_memory.distill()
 
         # 5.5. Update session status
         try:
@@ -1320,7 +1341,7 @@ Return ONLY JSON array like ["head", "top"], no other text.
                 progress_msg = msg.payload.get("message", "")
                 agent_progress[sender_id] = progress
                 logger.info(
-                    f"Progress from {sender_id}: {progress*100:.0f}% - {progress_msg}"
+                    f"Progress from {sender_id}: {progress * 100:.0f}% - {progress_msg}"
                 )
 
         # Check for missing results
