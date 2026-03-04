@@ -217,10 +217,8 @@ class MockLLM:
             )
 
         # Fashion search tool
-        if (
-            "fashion recommendations" in prompt_lower
-            or "colors" in prompt_lower
-            and "mood" in prompt_lower
+        if "fashion recommendations" in prompt_lower or (
+            "colors" in prompt_lower and "mood" in prompt_lower
         ):
             return json.dumps(
                 {
