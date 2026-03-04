@@ -59,12 +59,12 @@ class UserProfile:
         # Build context sections
         context_parts = [
             f"- 姓名: {self.name}",
-            f"- 性别: {"男" if self.gender == Gender.MALE else "女"}",
+            f"- 性别: {'男' if self.gender == Gender.MALE else '女'}",
             f"- 年龄: {self.age}岁",
             f"- 职业: {self.occupation}",
             f"- 爱好: {hobbies_str}",
             f"- 今日心情: {mood_desc}",
-            f"- 风格偏好: {self.style_preference or "无特定偏好"}",
+            f"- 风格偏好: {self.style_preference or '无特定偏好'}",
             f"- 预算: {self.budget}",
             f"- 季节: {self.season}",
             f"- 场合: {self.occasion}",

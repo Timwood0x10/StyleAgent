@@ -16,7 +16,7 @@ check-deps:
 
 install:
 	pip install -r requirements.txt
-	pip install ruff mypy pytest pytest-cov deptry
+	pip install ruff mypy pytest pytest-asyncio pytest-cov deptry
 
 lint:
 	ruff check src/ tests/ examples/

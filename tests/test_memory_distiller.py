@@ -266,9 +266,7 @@ class TestMemoryDistiller:
 
     def test_get_context_with_distilled_memory(self):
         distiller = MemoryDistiller()
-        distiller._distilled_memory = StructuredMemory(
-            user_profile={"name": "Tom"}
-        )
+        distiller._distilled_memory = StructuredMemory(user_profile={"name": "Tom"})
         distiller.add_user("Recent message")
         ctx = distiller.get_context()
         assert "Tom" in ctx
@@ -315,9 +313,7 @@ class TestMemoryDistiller:
     def test_distill_not_needed_with_existing_memory(self):
         mock_llm = MockLLM(mock_response='{"user_profile":{}}')
         distiller = MemoryDistiller(llm=mock_llm)
-        distiller._distilled_memory = StructuredMemory(
-            user_profile={"name": "Tom"}
-        )
+        distiller._distilled_memory = StructuredMemory(user_profile={"name": "Tom"})
         # Small content, should not trigger
         distiller.add_user("Hi")
         result = distiller.distill()
@@ -356,7 +352,12 @@ class TestMemoryDistiller:
 
     def test_distill_saves_to_storage(self):
         mock_response = json.dumps(
-            {"user_profile": {"city": "Beijing"}, "decisions_made": [], "pending_tasks": [], "important_facts": []}
+            {
+                "user_profile": {"city": "Beijing"},
+                "decisions_made": [],
+                "pending_tasks": [],
+                "important_facts": [],
+            }
         )
         mock_llm = MockLLM(mock_response=mock_response)
         mock_storage = MockStorage()
@@ -384,7 +385,12 @@ class TestMemoryDistiller:
 
     def test_distill_increments_level(self):
         mock_response = json.dumps(
-            {"user_profile": {}, "decisions_made": [], "pending_tasks": [], "important_facts": []}
+            {
+                "user_profile": {},
+                "decisions_made": [],
+                "pending_tasks": [],
+                "important_facts": [],
+            }
         )
         mock_llm = MockLLM(mock_response=mock_response)
 
@@ -409,7 +415,12 @@ class TestMemoryDistiller:
         mock_storage.search_results = [
             {
                 "summary": json.dumps(
-                    {"user_profile": {"name": "Tom"}, "decisions_made": [], "pending_tasks": [], "important_facts": []}
+                    {
+                        "user_profile": {"name": "Tom"},
+                        "decisions_made": [],
+                        "pending_tasks": [],
+                        "important_facts": [],
+                    }
                 )
             }
         ]

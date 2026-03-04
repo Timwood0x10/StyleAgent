@@ -1,12 +1,24 @@
 # Multi-Agent System
 
 # LLM
-openai>=1.0.0
+openai
 
 # Database
-psycopg2-binary>=2.9.0
-pgvector>=0.2.0
+psycopg2-binary
+pgvector
+
+# HTTP
+httpx
+requests
 
 # Utils
-python-dotenv>=1.0.0
-pyyaml>=6.0.0
+python-dotenv
+pyyaml
+
+# Testing   && static analysis
+ruff 
+mypy 
+pytest 
+pytest-asyncio 
+pytest-cov 
+deptry
