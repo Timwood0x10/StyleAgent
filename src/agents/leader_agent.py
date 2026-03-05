@@ -20,7 +20,7 @@ from ..core.validator import ResultValidator, ValidationLevel
 from ..core.registry import TaskRegistry, get_task_registry, TaskStatus
 from ..core.errors import RetryHandler, RetryConfig, ErrorType, CircuitBreaker
 from ..utils.context import SessionMemory
-from ..utils.llm import LocalLLM
+from ..utils.llm import LocalLLM, parse_json_response
 from ..utils import get_logger
 from ..utils.config import config
 from ..protocol import get_message_queue, AHPSender, AHPError, AHPErrorCode, AHPMethod
@@ -258,10 +258,8 @@ Return ONLY JSON array like ["head", "top"], no other text.
                 return []
 
             # Parse response
-            start = response.find("[")
-            end = response.rfind("]") + 1
-            if start >= 0 and end > start:
-                categories = json.loads(response[start:end])
+            categories = parse_json_response(response, expect_list=True)
+            if categories and isinstance(categories, list):
                 # Validate categories
                 valid_categories = {"head", "top", "bottom", "shoes"}
                 categories = [c for c in categories if c in valid_categories]
@@ -413,10 +411,8 @@ Only return JSON, no other content.
         )
 
         try:
-            start = response.find("{")
-            end = response.rfind("}") + 1
-            if start >= 0 and end > start:
-                data = json.loads(response[start:end])
+            data = parse_json_response(response)
+            if data and isinstance(data, dict):
                 return UserProfile(
                     name=data.get("name", "User"),
                     gender=Gender(data.get("gender", "male")),
@@ -623,6 +619,7 @@ Only return JSON, no other content.
         received: set[str] = set()
         pending_tasks = {t.assignee_agent_id: t for t in tasks}
         agent_progress: Dict[str, float] = {}  # Track progress per agent
+        progress_lock = threading.Lock()  # Thread safety for agent_progress
         progress_queue: queue.Queue = queue.Queue()  # Queue for progress messages
 
         # Start a background thread to handle PROGRESS messages
@@ -655,7 +652,8 @@ Only return JSON, no other content.
                     sender_id = msg.agent_id
                     progress = msg.payload.get("progress", 0)
                     progress_msg = msg.payload.get("message", "")
-                    agent_progress[sender_id] = progress
+                    with progress_lock:
+                        agent_progress[sender_id] = progress
                     logger.info(
                         f"Progress from {sender_id}: {progress * 100:.0f}% - {progress_msg}"
                     )
@@ -663,8 +661,7 @@ Only return JSON, no other content.
                     break
 
             # Receive any message, not specific to any agent
-            msg = self.mq.receive("leader", timeout=2)
-
+            msg = self.mq.receive("leader", timeout=config.AHP_MESSAGE_TIMEOUT)
             if msg is None:
                 continue
 
@@ -681,7 +678,8 @@ Only return JSON, no other content.
             if msg.method == AHPMethod.PROGRESS:
                 progress = msg.payload.get("progress", 0)
                 progress_msg = msg.payload.get("message", "")
-                agent_progress[sender_id] = progress
+                with progress_lock:
+                    agent_progress[sender_id] = progress
                 logger.info(
                     f"Progress from {sender_id}: {progress * 100:.0f}% - {progress_msg}"
                 )
@@ -815,6 +813,32 @@ Only return JSON, no other content.
                     )
             validated_results[category] = recommendation
 
+        # Batch validation for all results using validate_all
+        all_results_dict = {
+            cat: {
+                "items": rec.items,
+                "colors": rec.colors,
+                "styles": rec.styles,
+                "reasons": rec.reasons,
+                "price_range": rec.price_range,
+            }
+            for cat, rec in validated_results.items()
+        }
+        batch_validation = self.validator.validate_all(all_results_dict)
+
+        # Log validation summary
+        validation_summary = self.validator.get_summary(batch_validation)
+        logger.debug(f"Batch validation summary: {validation_summary}")
+
+        # Apply auto-fix for any failed validations
+        for category, vr in batch_validation.items():
+            if not vr.is_valid and vr.corrected:
+                rec = validated_results.get(category)
+                if rec:
+                    rec.items = vr.corrected.get("items", rec.items)
+                    rec.colors = vr.corrected.get("colors", rec.colors)
+                    rec.styles = vr.corrected.get("styles", rec.styles)
+
         style_prompt = f"""Based on the following user profile and outfit recommendations, provide overall style suggestions:
 
 User Profile:
@@ -842,10 +866,8 @@ Return JSON format:
         )
 
         try:
-            start = response.find("{")
-            end = response.rfind("}") + 1
-            if start >= 0 and end > start:
-                data = json.loads(response[start:end])
+            data = parse_json_response(response)
+            if data and isinstance(data, dict):
                 result = OutfitResult(
                     session_id=self.session_id,
                     user_profile=user_profile,
@@ -1123,10 +1145,8 @@ Please return JSON in the following format:
 
         try:
             response = await self.llm.ainvoke(prompt, SYSTEM_PROMPT)
-            start = response.find("{")
-            end = response.rfind("}") + 1
-            if start >= 0 and end > start:
-                data = json.loads(response[start:end])
+            data = parse_json_response(response)
+            if data and isinstance(data, dict):
                 return UserProfile(
                     name=data.get("name", "User"),
                     gender=Gender(data.get("gender", "male")),
@@ -1212,10 +1232,8 @@ Return ONLY JSON array like ["head", "top"], no other text.
             if not response:
                 return []
 
-            start = response.find("[")
-            end = response.rfind("]") + 1
-            if start >= 0 and end > start:
-                categories = json.loads(response[start:end])
+            categories = parse_json_response(response, expect_list=True)
+            if categories and isinstance(categories, list):
                 valid_categories = {"head", "top", "bottom", "shoes"}
                 categories = [c for c in categories if c in valid_categories]
                 if categories:
@@ -1307,13 +1325,14 @@ Return ONLY JSON array like ["head", "top"], no other text.
         received: set[str] = set()
         pending_tasks = {t.assignee_agent_id: t for t in tasks}
         agent_progress: Dict[str, float] = {}  # Track progress per agent
+        progress_lock = threading.Lock()  # Thread safety for agent_progress
 
         while len(received) < len(tasks) and (time.time() - start) < timeout:
             # Receive any message, not specific to any agent
             mq = self.mq
             if mq is None:
                 break
-            msg = await mq.receive("leader", timeout=2)
+            msg = await mq.receive("leader", timeout=config.AHP_MESSAGE_TIMEOUT)
 
             if msg is None:
                 continue
@@ -1339,7 +1358,8 @@ Return ONLY JSON array like ["head", "top"], no other text.
             elif msg.method == AHPMethod.PROGRESS:
                 progress = msg.payload.get("progress", 0)
                 progress_msg = msg.payload.get("message", "")
-                agent_progress[sender_id] = progress
+                with progress_lock:
+                    agent_progress[sender_id] = progress
                 logger.info(
                     f"Progress from {sender_id}: {progress * 100:.0f}% - {progress_msg}"
                 )
@@ -1371,10 +1391,8 @@ Please provide:
 
         try:
             response = await self.llm.ainvoke(style_prompt, SYSTEM_PROMPT)
-            start = response.find("{")
-            end = response.rfind("}") + 1
-            if start >= 0 and end > start:
-                data = json.loads(response[start:end])
+            data = parse_json_response(response)
+            if data and isinstance(data, dict):
                 result = OutfitResult(
                     session_id=self.session_id,
                     user_profile=user_profile,

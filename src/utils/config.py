@@ -143,12 +143,28 @@ class Config:
         return int(self._get("ahp.task_timeout", 60))
 
     @property
+    def AHP_MESSAGE_TIMEOUT(self) -> int:
+        """Timeout for receiving messages in seconds"""
+        return int(self._get("ahp.message_timeout", 2))
+
+    @property
     def AHP_HEARTBEAT_INTERVAL(self) -> int:
         return int(self._get("ahp.heartbeat_interval", 30))
 
     @property
     def AHP_MAX_RETRIES(self) -> int:
         return int(self._get("ahp.max_retries", 3))
+
+    # ==================== Task Collection ====================
+    @property
+    def TASK_COLLECTION_TIMEOUT(self) -> int:
+        """Timeout for collecting task results in seconds"""
+        return int(self._get("task.collection_timeout", 60))
+
+    @property
+    def DEFAULT_MAX_LOOPS(self) -> int:
+        """Default maximum loops for agent processing"""
+        return int(self._get("task.max_loops", 100))
 
     # ==================== Retry ====================
     @property
