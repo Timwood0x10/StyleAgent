@@ -324,26 +324,28 @@ class MockLLM:
         return self.embed(text)
 
 
-def parse_json_response(response: str, expect_list: bool = False) -> Optional[Union[dict, list]]:
+def parse_json_response(
+    response: str, expect_list: bool = False
+) -> Optional[Union[dict, list]]:
     """Parse JSON from LLM response with common patterns.
-    
+
     Args:
         response: Raw LLM response string
         expect_list: If True, expects a list ([]), otherwise expects a dict ({})
-    
+
     Returns:
         Parsed JSON object (dict or list), or None if parsing fails
     """
     if not response:
         return None
-    
+
     try:
         # Try to find JSON in markdown code blocks
         if "```json" in response:
             response = response.split("```json")[1].split("```")[0]
         elif "```" in response:
             response = response.split("```")[1].split("```")[0]
-        
+
         # Find JSON delimiters
         if expect_list:
             start = response.find("[")
@@ -351,12 +353,12 @@ def parse_json_response(response: str, expect_list: bool = False) -> Optional[Un
         else:
             start = response.find("{")
             end = response.rfind("}") + 1
-        
+
         if start >= 0 and end > start:
             return json.loads(response[start:end])
     except (json.JSONDecodeError, ValueError):
         pass
-    
+
     return None
 
 
