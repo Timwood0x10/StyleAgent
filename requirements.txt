@@ -11,6 +11,9 @@ pgvector
 httpx
 requests
 
+# Ethereum
+web3
+
 # Utils
 python-dotenv
 pyyaml

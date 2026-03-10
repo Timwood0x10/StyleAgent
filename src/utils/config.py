@@ -69,7 +69,7 @@ class Config:
 
     @property
     def PG_PORT(self) -> int:
-        return int(self._get("database.port", 5432))
+        return int(self._get("database.port", 5432, "PG_PORT"))
 
     @property
     def PG_DATABASE(self) -> str:
@@ -132,6 +132,30 @@ class Config:
     @property
     def EMBEDDING_DIM(self) -> int:
         return int(self._get("embedding.dimension", 1536))
+
+    # ==================== Ethereum ====================
+    @property
+    def ETH_RPC_URL(self) -> str:
+        return self._get("eth.rpc_url", "", "ETH_RPC_URL")
+
+    @property
+    def ETH_NETWORK(self) -> str:
+        return self._get("eth.network", "mainnet")
+
+    @property
+    def ETH_START_BLOCK(self) -> int:
+        """起始区块高度"""
+        return int(self._get("eth.start_block", 0))
+
+    @property
+    def ETH_END_BLOCK(self) -> int:
+        """结束区块高度，0 表示最新区块"""
+        return int(self._get("eth.end_block", 0))
+
+    @property
+    def ETH_BLOCK_BATCH_SIZE(self) -> int:
+        """每次查询的区块批次大小"""
+        return int(self._get("eth.batch_size", 100))
 
     # ==================== AHP ====================
     @property

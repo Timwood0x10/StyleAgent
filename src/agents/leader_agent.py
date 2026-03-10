@@ -17,7 +17,7 @@ from ..core.models import (
     OutfitResult,
 )
 from ..core.validator import ResultValidator, ValidationLevel
-from ..core.registry import TaskRegistry, get_task_registry, TaskStatus
+from ..core.registry import get_task_registry, TaskStatus
 from ..core.errors import RetryHandler, RetryConfig, ErrorType, CircuitBreaker
 from ..utils.context import SessionMemory
 from ..utils.llm import LocalLLM, parse_json_response
@@ -940,8 +940,6 @@ class AsyncLeaderAgent:
         self, func_name: str, func, *args, **kwargs
     ) -> Any:
         """Execute LLM call with circuit breaker and retry (async version)"""
-        from typing import Callable
-
         # Check circuit breaker
         if not self.circuit_breaker.can_execute():
             logger.warning(f"Circuit breaker OPEN for {func_name}, using fallback")
