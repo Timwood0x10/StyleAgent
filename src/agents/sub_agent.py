@@ -16,7 +16,7 @@ from ..core.models import (
 from ..utils.llm import LocalLLM, parse_json_response
 from ..utils import get_logger
 from ..protocol import get_message_queue, AHPReceiver, AHPSender, AHPError, AHPErrorCode
-from ..storage.postgres import StorageLayer
+from ..storage.postgres import StorageLayer, get_storage
 from ..core.errors import (
     RetryHandler,
     RetryConfig,
@@ -118,9 +118,9 @@ class OutfitSubAgent:
         self.fallback_handler.register("default", self._default_recommendation)
 
     def _get_db(self) -> StorageLayer:
-        """Lazy init database connection"""
+        """Lazy init database connection - use global singleton"""
         if self._db is None:
-            self._db = StorageLayer()
+            self._db = get_storage()
         return self._db
 
     def _get_registry(self) -> TaskRegistry:
@@ -137,8 +137,16 @@ class OutfitSubAgent:
         logger.info(f"{self.agent_id} started (listening)")
 
     def stop(self):
-        """Stop agent"""
+        """Stop the agent and clean up resources.
+
+        Sets the running flag to False and clears session memory to prevent
+        memory leaks when the agent is stopped.
+        """
         self._running = False
+        # Clean up session memory to prevent memory leak
+        if self.session_memory:
+            self.session_memory.clear()
+            self.session_memory = None
 
     def _run_loop(self):
         """Main loop - listen for messages"""
@@ -645,9 +653,9 @@ class AsyncOutfitSubAgent:
         logger.info(f"Async {self.agent_id} stopped")
 
     def _get_db(self) -> StorageLayer:
-        """Lazy init database connection"""
+        """Lazy init database connection - use global singleton"""
         if self._db is None:
-            self._db = StorageLayer()
+            self._db = get_storage()
         return self._db
 
     def _build_rag_query(self, user_profile: UserProfile) -> str:

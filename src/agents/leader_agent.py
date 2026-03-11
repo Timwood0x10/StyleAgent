@@ -17,7 +17,7 @@ from ..core.models import (
     OutfitResult,
 )
 from ..core.validator import ResultValidator, ValidationLevel
-from ..core.registry import TaskRegistry, get_task_registry, TaskStatus
+from ..core.registry import get_task_registry, TaskStatus
 from ..core.errors import RetryHandler, RetryConfig, ErrorType, CircuitBreaker
 from ..utils.context import SessionMemory
 from ..utils.llm import LocalLLM, parse_json_response
@@ -619,47 +619,8 @@ Only return JSON, no other content.
         received: set[str] = set()
         pending_tasks = {t.assignee_agent_id: t for t in tasks}
         agent_progress: Dict[str, float] = {}  # Track progress per agent
-        progress_lock = threading.Lock()  # Thread safety for agent_progress
-        progress_queue: queue.Queue = queue.Queue()  # Queue for progress messages
-
-        # Start a background thread to handle PROGRESS messages
-        def progress_handler():
-            while time.time() - start < timeout:
-                try:
-                    msg = self.mq.receive("leader", timeout=1)
-                    if msg is None:
-                        continue
-                    if msg.method == AHPMethod.PROGRESS:
-                        progress_queue.put(msg)
-                    else:
-                        # Put non-PROGRESS messages back to main handling
-                        # For now, just log other message types
-                        logger.debug(f"Ignoring non-PROGRESS in handler: {msg.method}")
-                except queue.Empty:
-                    continue
-                except Exception as e:
-                    logger.warning(f"Progress handler error: {e}")
-                    break
-
-        progress_thread = threading.Thread(target=progress_handler, daemon=True)
-        progress_thread.start()
 
         while len(received) < len(tasks) and (time.time() - start) < timeout:
-            # Process any queued PROGRESS messages
-            while not progress_queue.empty():
-                try:
-                    msg = progress_queue.get_nowait()
-                    sender_id = msg.agent_id
-                    progress = msg.payload.get("progress", 0)
-                    progress_msg = msg.payload.get("message", "")
-                    with progress_lock:
-                        agent_progress[sender_id] = progress
-                    logger.info(
-                        f"Progress from {sender_id}: {progress * 100:.0f}% - {progress_msg}"
-                    )
-                except queue.Empty:
-                    break
-
             # Receive any message, not specific to any agent
             msg = self.mq.receive("leader", timeout=config.AHP_MESSAGE_TIMEOUT)
             if msg is None:
@@ -674,12 +635,11 @@ Only return JSON, no other content.
                 logger.debug(f"Received ACK from {sender_id}: {ack_status}")
                 continue
 
-            # Skip PROGRESS messages - they are handled by background thread
+            # Handle PROGRESS messages
             if msg.method == AHPMethod.PROGRESS:
                 progress = msg.payload.get("progress", 0)
                 progress_msg = msg.payload.get("message", "")
-                with progress_lock:
-                    agent_progress[sender_id] = progress
+                agent_progress[sender_id] = progress
                 logger.info(
                     f"Progress from {sender_id}: {progress * 100:.0f}% - {progress_msg}"
                 )
@@ -940,8 +900,6 @@ class AsyncLeaderAgent:
         self, func_name: str, func, *args, **kwargs
     ) -> Any:
         """Execute LLM call with circuit breaker and retry (async version)"""
-        from typing import Callable
-
         # Check circuit breaker
         if not self.circuit_breaker.can_execute():
             logger.warning(f"Circuit breaker OPEN for {func_name}, using fallback")
@@ -1121,6 +1079,11 @@ class AsyncLeaderAgent:
             )
         except Exception as e:
             logger.warning(f"Failed to update session: {e}")
+
+        # Clean up session memory to prevent memory leak
+        if self.session_memory:
+            self.session_memory.clear()
+            self.session_memory = None
 
         return final
 

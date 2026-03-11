@@ -5,6 +5,7 @@ PostgreSQL + pgvector Storage Layer
 import os
 import json
 import uuid
+import threading
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -17,35 +18,103 @@ logger = get_logger(__name__)
 
 
 class Database:
-    """Database operations"""
+    """Database operations with connection pooling"""
+
+    _pool: Optional[Any] = None
+    _pool_lock = threading.Lock()
+
+    @classmethod
+    def _get_pool(cls):
+        """Get or create connection pool (singleton)"""
+        if cls._pool is None:
+            with cls._pool_lock:
+                if cls._pool is None:
+                    logger.info(
+                        f"Creating connection pool: {config.PG_HOST}:{config.PG_PORT}/{config.PG_DATABASE}"
+                    )
+                    try:
+                        # Try psycopg2.pool
+                        from psycopg2 import pool as pg_pool
+                        cls._pool = pg_pool.SimpleConnectionPool(
+                            minconn=1,
+                            maxconn=10,  # Max 10 connections in pool
+                            host=config.PG_HOST,
+                            port=config.PG_PORT,
+                            database=config.PG_DATABASE,
+                            user=config.PG_USER,
+                            password=config.PG_PASSWORD,
+                        )
+                    except AttributeError:
+                        # Fallback to simple connection
+                        logger.warning("Connection pool not available, using simple connection")
+                        cls._pool = None
+                        return None
+                    logger.info("Connection pool created")
+        return cls._pool
 
     def __init__(self):
+        """Initialize database (pool is created lazily)"""
         self._conn = None
+        self._ref_count = 0  # Reference count for connection lifecycle
+
+    def acquire(self):
+        """Acquire connection (increase ref count)"""
+        self._ref_count += 1
+        return self.get_connection()
+
+    def release(self):
+        """Release connection (decrease ref count, close if count is 0)"""
+        if self._ref_count > 0:
+            self._ref_count -= 1
+        if self._ref_count == 0:
+            self.return_connection()
+
+    def reset_ref_count(self):
+        """Reset reference count to 0 and close connection"""
+        self._ref_count = 0
+        self.return_connection()
+
+    def get_connection(self):
+        """Get connection from pool"""
+        if self._conn is None:
+            pool = self._get_pool()
+            if pool:
+                self._conn = pool.getconn()
+            else:
+                # Fallback to simple connection
+                self._conn = psycopg2.connect(
+                    host=config.PG_HOST,
+                    port=config.PG_PORT,
+                    database=config.PG_DATABASE,
+                    user=config.PG_USER,
+                    password=config.PG_PASSWORD,
+                )
+        return self._conn
+
+    def return_connection(self):
+        """Return connection to pool"""
+        if self._conn is not None:
+            pool = self._get_pool()
+            if pool:
+                pool.putconn(self._conn)
+            else:
+                self._conn.close()
+            self._conn = None
 
     @property
     def conn(self):
-        """Get database connection"""
-        if self._conn is None:
-            logger.info(
-                f"Connecting to database: {config.PG_HOST}:{config.PG_PORT}/{config.PG_DATABASE}"
-            )
-            self._conn = psycopg2.connect(
-                host=config.PG_HOST,
-                port=config.PG_PORT,
-                database=config.PG_DATABASE,
-                user=config.PG_USER,
-                password=config.PG_PASSWORD,
-            )
-            logger.info("Database connection established")
-        return self._conn
+        """Get database connection (for backward compatibility)"""
+        return self.get_connection()
 
     def execute(self, sql: str, params: tuple = None):
         """Execute SQL and return first row if available (cursor is auto-closed)"""
         cursor = None
+        conn = None
         try:
-            cursor = self.conn.cursor()
+            conn = self.acquire()
+            cursor = conn.cursor()
             cursor.execute(sql, params)
-            self.conn.commit()
+            conn.commit()
             # Fetch result before closing cursor (for RETURNING queries)
             try:
                 row = cursor.fetchone()
@@ -58,12 +127,16 @@ class Database:
         finally:
             if cursor:
                 cursor.close()
+            if conn:
+                self.release()
 
     def fetch_one(self, sql: str, params: tuple = None):
         """Fetch one row"""
         cursor = None
+        conn = None
         try:
-            cursor = self.conn.cursor()
+            conn = self.acquire()
+            cursor = conn.cursor()
             cursor.execute(sql, params)
             return cursor.fetchone()
         except Exception as e:
@@ -72,12 +145,16 @@ class Database:
         finally:
             if cursor:
                 cursor.close()
+            if conn:
+                self.release()
 
     def fetch_all(self, sql: str, params: tuple = None):
         """Fetch all rows"""
         cursor = None
+        conn = None
         try:
-            cursor = self.conn.cursor()
+            conn = self.acquire()
+            cursor = conn.cursor()
             cursor.execute(sql, params)
             return cursor.fetchall()
         except Exception as e:
@@ -86,20 +163,35 @@ class Database:
         finally:
             if cursor:
                 cursor.close()
+            if conn:
+                self.release()
 
     def close(self):
-        """Close connection"""
-        if self._conn:
-            self._conn.close()
-            self._conn = None
+        """Close and return connection to pool"""
+        self.return_connection()
+
+    @classmethod
+    def close_pool(cls):
+        """Close all connections in pool (call when shutting down)"""
+        if cls._pool is not None:
+            try:
+                cls._pool.closeall()
+            except Exception as e:
+                logger.warning(f"Error closing pool: {e}")
+            cls._pool = None
+            logger.info("Connection pool closed")
 
 
 class StorageLayer:
     """Storage Layer - PostgreSQL + pgvector"""
 
+    _tables_initialized = False  # Class-level flag to prevent re-initialization
+
     def __init__(self):
         self.db = Database()
-        self._init_tables()
+        if not StorageLayer._tables_initialized:
+            self._init_tables()
+            StorageLayer._tables_initialized = True
 
     def _init_tables(self):
         """Initialize all tables"""
@@ -202,7 +294,8 @@ class StorageLayer:
             embedding vector(1536),
             metadata JSONB,
             created_at TIMESTAMP DEFAULT NOW(),
-            updated_at TIMESTAMP DEFAULT NOW()
+            updated_at TIMESTAMP DEFAULT NOW(),
+            UNIQUE (session_id, agent_id, memory_type)
         );
         
         -- Task progress history table
@@ -226,6 +319,19 @@ class StorageLayer:
         CREATE INDEX IF NOT EXISTS idx_progress_task ON task_progress(task_id);
         CREATE INDEX IF NOT EXISTS idx_memory_session_agent ON memory_summaries(session_id, agent_id);
         CREATE INDEX IF NOT EXISTS idx_memory_embedding ON memory_summaries USING hnsw (embedding vector_cosine_ops);
+
+        -- Add unique constraint for memory_summaries table (if not exists)
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_constraint
+                WHERE conname = 'uk_memory_session_agent_type'
+            ) THEN
+                ALTER TABLE memory_summaries
+                ADD CONSTRAINT uk_memory_session_agent_type
+                UNIQUE (session_id, agent_id, memory_type);
+            END IF;
+        END $$;
         """
         self.db.execute(sql)
 
@@ -795,8 +901,10 @@ class StorageLayer:
         return results
 
     def close(self):
-        """Close database connection"""
-        self.db.close()
+        """Close database connection pool"""
+        # Reset ref count and close connection before closing pool
+        self.db.reset_ref_count()
+        Database.close_pool()
 
 
 # Global storage instance

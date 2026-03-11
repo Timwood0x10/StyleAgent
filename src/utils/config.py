@@ -69,7 +69,7 @@ class Config:
 
     @property
     def PG_PORT(self) -> int:
-        return int(self._get("database.port", 5432))
+        return int(self._get("database.port", 5432, "PG_PORT"))
 
     @property
     def PG_DATABASE(self) -> str:

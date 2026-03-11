@@ -136,6 +136,7 @@ class MessageQueue:
         self._lock = threading.Lock()
         self._heartbeats: Dict[str, datetime] = {}
         self._message_ids: Dict[str, set] = {}  # Track message IDs for deduplication
+        self._max_message_ids_per_agent = 1000  # Limit to prevent memory growth
         # Dead Letter Queue: stores failed messages
         self._dlq: Dict[str, list] = {}  # agent_id -> list of failed messages
         # Retry tracking
@@ -158,17 +159,32 @@ class MessageQueue:
                 self._message_ids[agent_id] = set()
 
             if message.message_id in self._message_ids[agent_id]:
-                logger.warning(f"Duplicate message detected: {message.message_id}")
+                logger.warning(
+                    f"Duplicate message detected: {message.message_id} for {agent_id}"
+                )
                 return
+
+            # Clean up old message IDs if limit exceeded (FIFO)
+            if len(self._message_ids[agent_id]) >= self._max_message_ids_per_agent:
+                old_id = next(iter(self._message_ids[agent_id]))
+                self._message_ids[agent_id].remove(old_id)
 
             self._message_ids[agent_id].add(message.message_id)
 
+        logger.debug(
+            f"MQ SEND: putting message {message.message_id} to queue for {agent_id}, method={message.method}"
+        )
         self.get_queue(agent_id).put(message)
 
     def receive(self, agent_id: str, timeout: float = 30) -> Optional[AHPMessage]:
         """Receive message"""
         try:
-            return self.get_queue(agent_id).get(timeout=timeout)
+            msg = self.get_queue(agent_id).get(timeout=timeout)
+            if msg:
+                logger.debug(
+                    f"MQ RECEIVE: got message {msg.message_id} for {agent_id}, method={msg.method}"
+                )
+            return msg
         except queue.Empty:
             return None
 
@@ -367,6 +383,9 @@ class AHPSender:
             task_id=task_id,
             session_id=session_id,
             payload={"result": result, "status": status},
+        )
+        logger.info(
+            f"SEND [->{target_agent}] RESULT: {result.get('category', 'unknown')} (agent_id: {self.agent_id}, task_id: {task_id})"
         )
         self.mq.send(target_agent, msg)
         return msg

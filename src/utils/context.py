@@ -84,32 +84,45 @@ class StructuredMemory:
             return cls()
 
     def merge(self, other: "StructuredMemory") -> "StructuredMemory":
-        """Merge another memory into this one, handling conflicts."""
+        """Merge another memory into this one, handling conflicts.
+
+        Creates new lists instead of modifying the original to prevent memory leaks.
+        This is critical for the SessionMemory _load_historical_memories operation.
+
+        Args:
+            other: Another StructuredMemory instance to merge into this one.
+
+        Returns:
+            A new StructuredMemory with merged data from both instances.
+        """
         # Merge user_profile (new values override old)
         merged_profile = {**self.user_profile, **other.user_profile}
 
-        # Merge decisions (append new, avoid duplicates)
-        existing_decisions = {d.get("key", ""): d for d in self.decisions_made}
+        # Merge decisions (append new, avoid duplicates) - 创建新列表避免修改原对象
+        merged_decisions = list(self.decisions_made)
+        existing_decisions = {d.get("key", "") for d in self.decisions_made}
         for d in other.decisions_made:
             key = d.get("key", "")
             if key and key not in existing_decisions:
-                self.decisions_made.append(d)
+                merged_decisions.append(d)
+                existing_decisions.add(key)
 
-        # Merge pending_tasks
-        existing_tasks = {t.get("task_id", ""): t for t in self.pending_tasks}
+        # Merge pending_tasks - 创建新列表避免修改原对象
+        merged_tasks = list(self.pending_tasks)
+        existing_tasks = {t.get("task_id", "") for t in self.pending_tasks}
         for t in other.pending_tasks:
             task_id = t.get("task_id", "")
             if task_id and task_id not in existing_tasks:
-                self.pending_tasks.append(t)
+                merged_tasks.append(t)
 
-        # Merge important_facts (avoid duplicates)
-        self.important_facts = list(set(self.important_facts + other.important_facts))
+        # Merge important_facts (avoid duplicates) - 创建新列表
+        merged_facts = list(set(self.important_facts + other.important_facts))
 
         return StructuredMemory(
             user_profile=merged_profile,
-            decisions_made=self.decisions_made,
-            pending_tasks=self.pending_tasks,
-            important_facts=self.important_facts,
+            decisions_made=merged_decisions,
+            pending_tasks=merged_tasks,
+            important_facts=merged_facts,
             metadata={**self.metadata, **other.metadata},
         )
 
@@ -207,7 +220,15 @@ class MemoryDistiller:
         if self._distill_level >= 3:
             logger.debug("Already at high distill level, skipping")
             return False
-        return self.get_current_tokens() > self.max_tokens * self.distill_threshold
+
+        current_tokens = self.get_current_tokens()
+
+        # Don't distill if token count is too small (minimum 100 tokens)
+        if current_tokens < 100:
+            logger.debug(f"Token count too small ({current_tokens}), skipping distillation")
+            return False
+
+        return current_tokens > self.max_tokens * self.distill_threshold
 
     def get_context(self) -> str:
         """
@@ -314,7 +335,7 @@ class MemoryDistiller:
             logger.warning("No LLM provided, cannot distill")
             return False
 
-        if not self.should_distill() and self._distilled_memory is not None:
+        if not self.should_distill():
             logger.debug("No distillation needed")
             return False
 
@@ -659,6 +680,7 @@ class SessionMemory:
             storage=storage,
             agent_id=agent_id,
             max_tokens=max_tokens,
+            distill_threshold=0.5,  # Task memory distills at 50% of max_tokens
             enable_importance_filter=False,  # Task memory doesn't need importance filter
         )
         self._task_memory_distiller.set_session(session_id)
