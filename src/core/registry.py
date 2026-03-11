@@ -315,3 +315,13 @@ def get_task_registry() -> TaskRegistry:
 
 # Alias for convenience
 get_registry = get_task_registry
+
+
+def reset_task_registry():
+    """Reset the global task registry to clean state.
+
+    This should be called between demo runs to prevent memory leaks
+    from accumulated task cache entries.
+    """
+    global _registry
+    _registry = None
