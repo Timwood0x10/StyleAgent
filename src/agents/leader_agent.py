@@ -553,6 +553,7 @@ Only return JSON, no other content.
         coordination_context: Dict[str, Any] = None,
     ):
         """Dispatch tasks via AHP protocol with error handling and optional coordination context"""
+        from concurrent.futures import ThreadPoolExecutor
 
         # Category description mapping
         category_desc = {
@@ -562,7 +563,8 @@ Only return JSON, no other content.
             "shoes": "shoes",
         }
 
-        for task in tasks:
+        def send_single_task(task: OutfitTask):
+            """Send a single task (for parallel execution)"""
             desc = category_desc.get(task.category, task.category)
             # Build compact instruction (Token control)
             payload = {
@@ -597,18 +599,13 @@ Only return JSON, no other content.
                     payload=payload,
                     token_limit=500,
                 )
-                logger.info(
-                    f"Dispatched task {task.task_id} to {task.assignee_agent_id}"
-                )
+                logger.info(f"Dispatched task {task.task_id} to {target_agent}")
             except Exception as e:
-                target_agent = task.assignee_agent_id or "unknown"
-                error = AHPError(
-                    message=f"Failed to dispatch task: {str(e)}",
-                    code=AHPErrorCode.TIMEOUT,
-                    agent_id=target_agent,
-                    task_id=task.task_id,
-                )
-                logger.error(f"AHP Error: {error.message}")
+                logger.error(f"Failed to dispatch task {task.task_id}: {e}")
+
+        # Dispatch all tasks in parallel using ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
+            executor.map(send_single_task, tasks)
 
     def _collect_results(
         self, tasks: List[OutfitTask], timeout: int = 60
@@ -1083,7 +1080,7 @@ class AsyncLeaderAgent:
         # Clean up session memory to prevent memory leak
         if self.session_memory:
             self.session_memory.clear()
-            self.session_memory = None
+            self.session_memory = None  # type: ignore[assignment]
 
         return final
 
@@ -1280,7 +1277,7 @@ Return ONLY JSON array like ["head", "top"], no other text.
         await asyncio.gather(*[send_task(task) for task in tasks])
 
     async def _collect_results(
-        self, tasks: List[OutfitTask], timeout: int = 60
+        self, tasks: List[OutfitTask], timeout: int = 180
     ) -> Dict[str, OutfitRecommendation]:
         """Collect results from all agents (async)"""
         results: Dict[str, OutfitRecommendation] = {}

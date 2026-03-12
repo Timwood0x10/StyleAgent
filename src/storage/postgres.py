@@ -35,6 +35,7 @@ class Database:
                     try:
                         # Try psycopg2.pool
                         from psycopg2 import pool as pg_pool
+
                         cls._pool = pg_pool.SimpleConnectionPool(
                             minconn=1,
                             maxconn=10,  # Max 10 connections in pool
@@ -46,7 +47,9 @@ class Database:
                         )
                     except AttributeError:
                         # Fallback to simple connection
-                        logger.warning("Connection pool not available, using simple connection")
+                        logger.warning(
+                            "Connection pool not available, using simple connection"
+                        )
                         cls._pool = None
                         return None
                     logger.info("Connection pool created")

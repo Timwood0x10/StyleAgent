@@ -7,8 +7,9 @@ import json
 import requests
 import httpx
 import asyncio
-from typing import Optional, Union, List
+from typing import Optional, Union, List, Any
 from .config import config
+from .logger import get_logger
 
 
 class LocalLLM:
@@ -322,6 +323,61 @@ class MockLLM:
         """Mock async embed"""
         await asyncio.sleep(0.05)
         return self.embed(text)
+
+
+def normalize_to_string_list(value: Any, key: str = "name") -> List[str]:
+    """Normalize various input formats to string list.
+
+    Supports:
+    - ["item1", "item2"] - plain string list
+    - [{"name": "item1"}, {"value": "item2"}] - object list
+    - [{"item": "item1"}] - object list with 'item' key
+    - "item1, item2" - comma-separated string
+
+    Args:
+        value: The value to normalize
+        key: Key to extract from dict objects (default: "name")
+
+    Returns:
+        List of strings
+    """
+    if not value:
+        return []
+
+    # Already a list of strings
+    if isinstance(value, list) and value and isinstance(value[0], str):
+        return value
+
+    # List of objects - extract specified key or first value
+    if isinstance(value, list) and value and isinstance(value[0], dict):
+        result = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            # Try common keys in order
+            for k in [key, "value", "text", "item", "reason"]:
+                if k in item:
+                    result.append(str(item[k]))
+                    break
+            else:
+                # Take first value as fallback
+                if item:
+                    result.append(str(list(item.values())[0]))
+        return [r for r in result if r]
+
+    # Single string or comma-separated
+    if isinstance(value, str):
+        if "," in value:
+            return [v.strip() for v in value.split(",") if v.strip()]
+        return [value] if value.strip() else []
+
+    # Log unexpected format for debugging
+    logger = get_logger(__name__)
+    logger.warning(
+        f"Unexpected value type in normalize_to_string_list: {type(value)}, value: {value!r}"
+    )
+
+    return []
 
 
 def parse_json_response(

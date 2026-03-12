@@ -13,7 +13,7 @@ from ..core.models import (
     TaskStatus,
     Gender,
 )
-from ..utils.llm import LocalLLM, parse_json_response
+from ..utils.llm import LocalLLM, parse_json_response, normalize_to_string_list
 from ..utils import get_logger
 from ..protocol import get_message_queue, AHPReceiver, AHPSender, AHPError, AHPErrorCode
 from ..storage.postgres import StorageLayer, get_storage
@@ -245,8 +245,12 @@ class OutfitSubAgent:
             logger.info(f"[{self.agent_id}] task completed")
 
         except Exception as e:
+            import traceback
+
+            tb = traceback.format_exc()
+            logger.error(f"[{self.agent_id}] task failed: {e}\nTraceback: {tb}")
             self.sender.send_result(
-                "leader", task_id, session_id, {"error": str(e)}, status="failed"
+                "leader", task_id, session_id, {"error": f"{e}\n{tb}"}, status="failed"
             )
             # Move to DLQ for failed tasks
             self.mq.to_dlq(self.agent_id, msg, str(e))
@@ -380,6 +384,12 @@ class OutfitSubAgent:
         coordination_context: dict = None,
     ) -> OutfitRecommendation:
         """Execute recommendation with tools, RAG and coordination context"""
+        from ..utils.logger import get_logger
+
+        logger = get_logger(__name__)
+        logger.info(
+            f"[{self.agent_id}] _recommend called for category: {self.category}"
+        )
 
         if coordination_context is None:
             coordination_context = {}
@@ -491,8 +501,8 @@ class OutfitSubAgent:
             tool_context += f"- Suggestion: {suggestion}\n"
 
         if style_info:
-            items = style_info.get("items", [])
-            tips = style_info.get("tips", [])
+            items = normalize_to_string_list(style_info.get("items", []), key="name")
+            tips = normalize_to_string_list(style_info.get("tips", []), key="tip")
             tool_context += (
                 f"\nStyle Recommendations ({style_info.get('style', 'casual')}):\n"
             )
@@ -547,12 +557,18 @@ Requirements:
 Please return JSON format:
 {{
     "category": "{self.category}",
-    "items": ["recommended item 1", "recommended item 2"],
-    "colors": ["color 1", "color 2"],
-    "styles": ["style 1", "style 2"],
-    "reasons": ["reason 1", "reason 2"],
-    "price_range": "price range"
+    "items": ["recommended item 1", "recommended item 2"],  # MUST be array of strings
+    "colors": ["color 1", "color 2"],  # MUST be array of strings
+    "styles": ["style 1", "style 2"],  # MUST be array of strings
+    "reasons": ["reason 1", "reason 2"],  # MUST be array of strings
+    "price_range": "price range"  # single string
 }}
+
+IMPORTANT: 
+- All arrays must contain STRINGS only, not objects
+- WRONG: items: [{{"name": "item1"}}]
+- CORRECT: items: ["item1", "item2"]
+- Do NOT wrap items in objects, use plain strings
 
 Only return JSON.
 """
@@ -565,10 +581,12 @@ Only return JSON.
             if data and isinstance(data, dict):
                 return OutfitRecommendation(
                     category=data.get("category", self.category),
-                    items=data.get("items", []),
-                    colors=data.get("colors", []),
-                    styles=data.get("styles", []),
-                    reasons=data.get("reasons", []),
+                    items=normalize_to_string_list(data.get("items", [])),
+                    colors=normalize_to_string_list(data.get("colors", []), key="name"),
+                    styles=normalize_to_string_list(data.get("styles", []), key="name"),
+                    reasons=normalize_to_string_list(
+                        data.get("reasons", []), key="reason"
+                    ),
                     price_range=data.get("price_range", ""),
                 )
         except Exception as e:
@@ -800,10 +818,12 @@ class AsyncOutfitSubAgent:
             if data and isinstance(data, dict):
                 return OutfitRecommendation(
                     category=data.get("category", self.category),
-                    items=data.get("items", []),
-                    colors=data.get("colors", []),
-                    styles=data.get("styles", []),
-                    reasons=data.get("reasons", []),
+                    items=normalize_to_string_list(data.get("items", [])),
+                    colors=normalize_to_string_list(data.get("colors", []), key="name"),
+                    styles=normalize_to_string_list(data.get("styles", []), key="name"),
+                    reasons=normalize_to_string_list(
+                        data.get("reasons", []), key="reason"
+                    ),
                     price_range=data.get("price_range", ""),
                 )
         except Exception as e:
@@ -928,8 +948,8 @@ class AsyncOutfitSubAgent:
             tool_context += f"- Suggestion: {suggestion}\n"
 
         if style_info:
-            items = style_info.get("items", [])
-            tips = style_info.get("tips", [])
+            items = normalize_to_string_list(style_info.get("items", []), key="name")
+            tips = normalize_to_string_list(style_info.get("tips", []), key="tip")
             tool_context += (
                 f"\nStyle Recommendations ({style_info.get('style', 'casual')}):\n"
             )
@@ -987,12 +1007,18 @@ Requirements:
 Please return JSON format:
 {{
     "category": "{self.category}",
-    "items": ["recommended item 1", "recommended item 2"],
-    "colors": ["color 1", "color 2"],
-    "styles": ["style 1", "style 2"],
-    "reasons": ["reason 1", "reason 2"],
-    "price_range": "price range"
+    "items": ["recommended item 1", "recommended item 2"],  # MUST be array of strings
+    "colors": ["color 1", "color 2"],  # MUST be array of strings
+    "styles": ["style 1", "style 2"],  # MUST be array of strings
+    "reasons": ["reason 1", "reason 2"],  # MUST be array of strings
+    "price_range": "price range"  # single string
 }}
+
+IMPORTANT: 
+- All arrays must contain STRINGS only, not objects
+- WRONG: items: [{{"name": "item1"}}]
+- CORRECT: items: ["item1", "item2"]
+- Do NOT wrap items in objects, use plain strings
 
 Only return JSON.
 """

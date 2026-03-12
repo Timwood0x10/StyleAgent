@@ -225,7 +225,9 @@ class MemoryDistiller:
 
         # Don't distill if token count is too small (minimum 100 tokens)
         if current_tokens < 100:
-            logger.debug(f"Token count too small ({current_tokens}), skipping distillation")
+            logger.debug(
+                f"Token count too small ({current_tokens}), skipping distillation"
+            )
             return False
 
         return current_tokens > self.max_tokens * self.distill_threshold

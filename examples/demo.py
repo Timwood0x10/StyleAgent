@@ -32,6 +32,7 @@ def main():
     if not llm.available:
         print("   WARN Local model not connected, using MockLLM for demo")
         from src.utils.llm import MockLLM
+
         llm = MockLLM()
 
     # 3. Reset message queue and registry for clean state
